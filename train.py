@@ -14,6 +14,8 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123
 - Run on the worker node:
 $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
+
+This version has pruning feature from 290-302. You can change pruning_p to change the pruning rate.
 """
 
 import os
@@ -66,6 +68,9 @@ decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+# pruning 
+prune = 0
+pruning_p = 500 #pruning once after 500 times interations
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -283,6 +288,20 @@ while True:
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
     if iter_num == 0 and eval_only:
         break
+    
+    #a basic magnitude-based weight pruning for a neural network using PyTorch
+    def magnitude_prune(model, pruning_rate):
+        all_weights = []
+        for name, param in model.named_parameters():
+            if 'weight' in name:
+                all_weights += list(param.cpu().detach().abs().numpy().flatten())
+
+        threshold = np.percentile(np.array(all_weights), pruning_rate)
+
+        for name, param in model.named_parameters():
+            if 'weight' in name:
+                with torch.no_grad():
+                    param *= (param.abs() >= threshold).float()
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -300,6 +319,20 @@ while True:
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
+        if prune: 
+            if iter_num % pruning_p == 0:
+                magnitude_prune(model, 20)
+    # Use gradients to decide which weights to prune
+    # For simplicity, prune 50% of the smallest absolute gradients in the fc layer
+    #num_weights_to_prune = int(0.5 * model.fc.weight.numel())
+    #sorted_weights = torch.abs(model.fc.weight.grad).flatten().sort()[0]
+    #threshold = sorted_weights[num_weights_to_prune]
+
+    # Create a mask where we keep weights with gradients larger than the threshold
+    #mask = torch.abs(model.fc.weight.grad) > threshold
+    #model.fc.weight.data.mul_(mask)
+
+# Now, 50% of the weights in the fc layer will be zeroed out based on gradient magnitude.
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)

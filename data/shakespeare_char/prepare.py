@@ -9,10 +9,16 @@ import pickle
 import requests
 import numpy as np
 
+tinystories = 0
+number = 0
 # download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
 if not os.path.exists(input_file_path):
-    data_url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
+    if tinystories:
+        data_url = 'https://huggingface.co/datasets/msaligane/tinystories_phonology/blob/main/tinystoryP{}.txt'
+        data_url = data_url.format(str(number).zfill(2))
+    else:
+        data_url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
     with open(input_file_path, 'w') as f:
         f.write(requests.get(data_url).text)
 
