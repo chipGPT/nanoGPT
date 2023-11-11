@@ -8,16 +8,48 @@ import os
 import pickle
 import requests
 import numpy as np
+import argparse
+from datasets import load_dataset
+from pathlib import Path
 
-# download the tiny shakespeare dataset
+parser = argparse.ArgumentParser(description="Select training model, little Shakespeare or tinystories")
+parser.add_argument('--choice', type=int, default=0, help="0 for little Shakespeare, 1 for tinystories")
+
+args = parser.parse_args()
+choice = args.choice
+
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
-if not os.path.exists(input_file_path):
-    data_url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
-    with open(input_file_path, 'w') as f:
-        f.write(requests.get(data_url).text)
+#load data from hugging face
+if choice == 1:
+    data_dir = Path("data")
+    data_dir.mkdir(exist_ok=True)
+    if not os.path.exists(data_dir / "full.txt"):
+        dataset = load_dataset("msaligane/tinystories_phonology",  split="train")
+        full_text = ""
+        for i, example in enumerate(dataset):
+            filename = f"tinystoryP{i:02d}.txt"
+            filepath = data_dir / filename
+        
+            with open(filepath, "w") as f:
+                f.write(example["text"])
+        
+            full_text += example["text"] + "\n"
 
-with open(input_file_path, 'r') as f:
-    data = f.read()
+        with open(data_dir / "full.txt", "w") as f:
+            f.write(full_text)
+    #get data from 
+    with open(data_dir / "full.txt", 'r') as f:
+        data = f.read()
+# download the tiny shakespeare dataset
+elif choice == 0:
+
+    if not os.path.exists(input_file_path):
+        data_url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
+        with open(input_file_path, 'w') as f:
+            f.write(requests.get(data_url).text)
+
+    with open(input_file_path, 'r') as f:
+        data = f.read()
 print(f"length of dataset in characters: {len(data):,}")
 
 # get all the unique characters that occur in this text

@@ -5,6 +5,8 @@ from datetime import datetime
 import math
 import pickle
 from contextlib import nullcontext
+import argparse
+from pruning import magnitude_prune
 
 import numpy as np
 import torch
