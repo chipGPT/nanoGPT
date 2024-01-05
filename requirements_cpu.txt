@@ -63,9 +63,6 @@ tensorboard==2.15.1
 tensorboard-data-server==0.7.2
 tiktoken==0.5.1
 tokenizers==0.14.1
-torch==2.1.0+cpu
-torchaudio==2.1.0+cpu
-torchvision==0.16.0+cpu
 tqdm==4.66.1
 transformers==4.35.0
 typing_extensions==4.4.0
@@ -75,3 +72,4 @@ wandb==0.15.12
 Werkzeug==3.0.1
 xxhash==3.4.1
 yarl==1.9.2
+rich==13.5.3
