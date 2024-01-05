@@ -1,0 +1,55 @@
+11:27:28    16 -->                                                             [tcl] ucliGUI::connect -toolargs -ucligui -toolexe sim +v2k +vc +vcs+lic+wait +multisource_int_delays +lint=TFIPC-L +neg_tchk +overlap +warn=noSDFCOM_UHICD +warn=noSDFCOM_IWSBA +warn=noSDFCOM_IANE +warn=noSDFCOM_PONF +warn=noSDFCOM_UHICD,noSDFCOM_IWSBA,noSDFCOM_IANE,noSDFCOM_PONF +libext+.v+.vlib+.vh -pid 25344 -toolin /tmp/vcs_20231222162726_25343_guanchen..stdin -toolout /tmp/vcs_20231222162726_25343_guanchen..stdout  
+11:27:28    17 -->                                                                 [tcl] set ucliGUI::state
+11:27:28    18 -->                                                                     [tcl] gui_update_simulator_buttons
+11:27:29    19 -->                                                                         [tcl] set ucliGUI::state
+11:27:29    20 -->                                                                             [tcl] ucliCore::getToolPID
+11:27:29    21 -->                                                                                 [tcl] synopsys::env hasTB
+11:27:29    22 -->                                                                                     [tcl] trigger_hier_stack_context_switch 0
+11:27:29    23 -->                                                                                         [tcl] synUtils::setDVEInitPhase 1
+11:27:29    24 -->                                                                                             [tcl] gui_get_env SIMSETUP::SIMVPD
+11:27:29    25 --> ...  [tcl] synopsys::dump -type VPD -file /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/inter.vpd -locking
+11:27:29    26 --> ...      [tcl] synopsys::dump -autoflush on -fid VPD0
+11:27:29    27 --> ...          [tcl] set ::dve_fid VPD0
+11:27:29    28 --> ...              [tcl] synUtils::setDVEInitPhase 0
+11:27:29    29 --> ...                  [tcl] ucliCore::getToolPID
+11:27:29    30 --> ...                      [tcl] synUtils::sendTool -active _icl_setToolSocket /tmp/smlnp96bG1R
+11:27:29    31 --> ...                          [tcl] synUtils::sendTool -active {_icl_start_rpc -version "R-2020.12-SP2-1_Full64" -sync_file /tmp/vcs_dve_rpc.guanchen.25344}
+11:27:29    32 --> ...                              [tcl] synUtils::sendTool -active {_icl_createSharedMemory /tmp/vcs_dve_general.guanchen.25344}
+11:27:29    33 --> ...                                  [tcl] dveMisc::vbusExpand DEFINE_PKG
+11:27:30    34 --> ...                                      [tcl] config endofsim noexit
+11:27:30    35 --> ...                                          [tcl] config onfail enable all
+11:27:30    36 --> ...                                              [tcl] config syscaddplainmembers
+11:27:30    37 --> ...                                                  [tcl] config syscaddsourcenames
+11:27:30    38 --> ...                                                      [tcl] config syscaddstructtypes
+11:27:30    39 --> ...                                                          [tcl] synopsys::listing -disable
+11:30:36    40 --> ...                                                              [tcl] dveMisc::vbusExpand {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul}
+11:30:36    41 --> ...                                                                  [tcl] dveMisc::vbusExpand {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add}
+11:30:41    42 --> ...                                                                      [tcl] synopsys::dump -add {{tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.M_result} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.a_in} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.b_in} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.e_result} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.e_result0} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.mul_fix_out} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.overflow} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.overflow_mask} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.result} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.sign} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.mul.zero_check} } -aggregates  -fid VPD0
+11:30:50    43 --> ...                                                                          [tcl] synopsys::dump -add {{tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.Comp_enable} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.Exception} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.a_operand} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.add_sum} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.b_operand} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.exp_a} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.exp_b} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.exponent_b_add} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.exponent_diff} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.operand_a} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.operand_b} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.operation_sub_addBar} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.output_sign} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.result} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.significand_a} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.significand_add} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.significand_b} {tb.DUT.gen_sa_row[3].gen_sa_col[3].genblk1.genblk1.PE_ij.add.significand_b_add} } -aggregates  -fid VPD0
+11:30:52    44 --> ...                                                                              [tcl] synopsys::run
+11:30:52    45 --> ...                                                                                  [tcl] set ucliGUI::state
+11:30:52    46 --> ...                                                                                      [tcl] gui_update_simulator_buttons
+11:30:52    47 --> ...                                                                                          [tcl] set ucliGUI::state
+11:30:52    48 --> ...                                                                                              [tcl] set ucliGUI::state
+11:30:52    49 --> ...                                                                                                  [tcl] set ucliGUI::state
+11:30:52    50 --> ...  [tcl] catch {senv activeDomain} dveMisc::result 
+11:30:52    51 --> ...      [tcl] set dveMisc::result
+11:30:52    52 --> ...          [tcl] gui_update_simulator_buttons
+11:30:52    53 --> ...              [tcl] dveMisc::vbusExpand tb
+11:30:52    54 --> ...                  [tcl] dveMisc::vbusExpand _vcs_unit__2526495106
+11:30:52    55 --> ...                      [tcl] synopsys::dump -add {tb.input_left} -aggregates  -fid VPD0
+11:30:52    56 --> ...                          [tcl] ucliGUI::getSignalValues -scope tb -radix {binary binary hexadecimal } -list {rstn clk input_left }
+11:30:53    57 --> ...                              [tcl] ucliGUI::vpdAddHierarchy -scope tb -depth 2 -file /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/inter.vpd; synopsys::dump -flush VPD0
+11:30:53    58 --> ...                                  [tcl] synopsys::dump -add {tb.rstn} -aggregates  -fid VPD0
+11:30:53    59 --> ...                                      [tcl] synopsys::dump -add {tb.clk} -aggregates  -fid VPD0
+11:49:03    60 --> ...                                          [tcl] if [catch {gui_sim_terminate}] {gui_sim_terminate -kill}
+11:49:03    61 --> ...                                              [tcl] synopsys::finish
+11:49:03    62 --> ...                                                  [tcl] set ucliGUI::state
+11:49:03    63 --> ...                                                      [tcl] gui_update_simulator_buttons
+11:49:04    64 --> ...                                                          [tcl] set ucliGUI::state
+11:49:04    65 --> ...                                                              [tcl] catch {senv activeDomain} dveMisc::result 
+11:49:04    66 --> ...                                                                  [tcl] set dveMisc::result
+11:49:04    67 --> ...                                                                      [tcl] gui_update_simulator_buttons
+11:49:04    68 --> ...                                                                          [tcl] catch {senv activeDomain} dveMisc::result 
+11:49:04    69 --> ...                                                                              [tcl] set dveMisc::result
+11:49:04    70 --> ...                                                                                  [tcl] ucli_exit

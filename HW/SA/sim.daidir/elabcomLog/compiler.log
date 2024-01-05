@@ -1,0 +1,3 @@
+*design* DebussyLib (btIdent Verdi_R-2020.12-SP2-1)
+Command arguments:  -lib  /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/work  -saveLevel  -elab  /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/kdb  -simflow  -simdir  /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/kdb_libs  -topfile  /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/.elabcomTopFile  -pkgfile  /net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/.elabcomPkgFile  -ssv  -ssy  -Lf  work  +disable_message+C00380+C00381  +disable_message+C00388+C00389  -SNPS_ELABCOM  -saveElab 
+Total	0 error(s),   0 warning(s)
