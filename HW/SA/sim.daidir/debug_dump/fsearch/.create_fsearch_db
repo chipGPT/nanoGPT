@@ -1,9 +1,0 @@
-#!/bin/sh -h 
-PYTHONHOME=/usr/caen/vcs-2020.12-SP2-1/etc/search/pyh
-export PYTHONHOME
-PYTHONPATH=/usr/caen/vcs-2020.12-SP2-1/linux64/lib/pylib27
-export PYTHONPATH
-LD_LIBRARY_PATH=/usr/caen/vcs-2020.12-SP2-1/linux64/lib:/usr/caen/vcs-2020.12-SP2-1/linux64/lib/pylib27
-export LD_LIBRARY_PATH
-/usr/caen/vcs-2020.12-SP2-1/linux64/bin/vcsfind_create_index.exe  -z  "/net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/debug_dump/fsearch/./idents_tapi.xml.gz" "/net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/debug_dump/fsearch/./idents_13yfEn.xml.gz" -o "/net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/debug_dump/fsearch/fsearch.db_tmp"
-\mv "/net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/debug_dump/fsearch/fsearch.db_tmp" "/net/brevort/z/guanchen/projects/transformer/nanoGPT_hw/HW/SA/sim.daidir/debug_dump/fsearch/fsearch.db"

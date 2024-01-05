@@ -1,6 +1,0 @@
-../SA/define.vh
-../SA/tb/tb.sv
-../SA/verilog/PE.sv
-../SA/verilog/SA.sv
-../SA/verilog/fadd.sv
-../SA/verilog/fmul.sv
