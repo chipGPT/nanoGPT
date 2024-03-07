@@ -84,3 +84,83 @@ class ShortRope(nn.Module):
 
         return x
 
+
+class ROPE:
+    # this will use cordic rather than rotation matrix
+    def __perform_2Drotation(cls, theta: float, vec2d: list) -> np.array:
+        """rotate 2 dimensional vector by angle theta
+
+        Args:
+            theta (float): the angle which this matrix will rotate the vector
+            vec2d (list): the vector of length 2 that will be rotated
+
+        Returns:
+            np.array: vec2d rotated by angle theta
+        """
+        rotmatrx = cls.__get_2Drotation_matrix(theta)
+        return rotation_matrix @ vec2d
+
+    def __get_2Drotation_matrix(cls, theta: float) -> np.array:
+        """generate 2 dimensional vector rotation matrix to rotate a vector by angle theta
+
+        Args:
+            theta (float): the angle which this matrix will rotate the vector
+
+        Returns:
+            np.array: 2 by 2 matrix which when multiplied by a col vector will rotate it angle theta
+        """
+        return np.array(
+            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+        )
+
+    def __init__(self, embedding_len: int, base: int = 10000):
+        """setup ROPE calculation
+
+        Args:
+            embedding_len (int): length of input embedding vectors
+            base (int): parameter to use as base for theta exponent
+
+        Raises:
+            NotImplementedError: if embedding_len is odd (only even supported)
+            ValueError: if embedding_len < 2 (at least 2 required)
+        """
+        # error checking
+        embedding_len = int(embedding_len)
+        if embedding_len % 2:
+            raise NotImplementedError("ROPE support only even dimensionality vectors")
+        if embedding_len < 2:
+            raise ValueError("embedding length must be at least 2")
+        # compute rotation angles for each pair
+        self.input_len = embedding_len
+        num_blocks = embedding_len // 2
+        self.thetas = [base ** (-2 * i / embedding_len) for i in range(num_blocks)]
+        print(self.thetas)
+
+    def __call__(self, vec: np.array, m: int) -> np.array:
+        """perform ROPE positional embedding
+
+        Args:
+            vec (np.array): input vector to rotate
+            m (int): position (0th position means the first token)
+
+        Raises:
+            ValueError: if m is negative
+            ValueError: length of input vector does not match expected length
+
+        Returns:
+            np.array: vector with ROPE positional embedding
+        """
+        vec = np.array(vec)  # ensure input is np.array
+        if m < 0:
+            raise ValueError("postion 'm' must be positive")
+        if len(vec) != self.input_len:
+            raise ValueError(f"input vector must be length {self.input_len}")
+        # compute rotations in pairs (each pair corresponds to a theta)
+        rotatedvec = np.zeros(vec.shape)
+        # import pdb; pdb.set_trace()
+        for i, theta in enumerate(self.thetas):
+            rotatedvec[2 * i : 2 * i + 2] = self.__perform_2Drotation(
+                theta * m, vec[2 * i : 2 * i + 2]
+            )
+        return rotatedvec
+
