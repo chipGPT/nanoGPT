@@ -1,5 +1,15 @@
 import torch
 import torch.nn as nn
+import numpy as np
+from vector2d_rotator_variations import (
+    Rotator,
+    PerfectRotator,
+    CORDIC1959,
+    FOE,
+    DoubleFOE,
+    DoubleFOE_Advanced,
+)
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, config):
@@ -7,8 +17,14 @@ class RotaryEmbedding(nn.Module):
         self.dim = config.n_embd
 
         # Register frequencies directly as buffers
-        self.register_buffer('freq_left', (10000 ** (torch.arange(0, self.dim//2).float() / self.dim//2)))
-        self.register_buffer('freq_right',(10000 ** (torch.arange(0, self.dim//2).float() / self.dim//2)))
+        self.register_buffer(
+            "freq_left",
+            (10000 ** (torch.arange(0, self.dim // 2).float() / self.dim // 2)),
+        )
+        self.register_buffer(
+            "freq_right",
+            (10000 ** (torch.arange(0, self.dim // 2).float() / self.dim // 2)),
+        )
 
     def forward(self, x):
         seq_len = x.shape[-2]
@@ -17,11 +33,11 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(seq_len, device=device)
 
         # Get separate frequencies for left and right
-        freqs_left = torch.einsum('i,j->ij', t, self.freq_left)
-        freqs_right = torch.einsum('i,j->ij', t, self.freq_right)
+        freqs_left = torch.einsum("i,j->ij", t, self.freq_left)
+        freqs_right = torch.einsum("i,j->ij", t, self.freq_right)
 
         # Apply frequencies
-        x_left, x_right = x[..., :self.dim//2], x[..., self.dim//2:]
+        x_left, x_right = x[..., : self.dim // 2], x[..., self.dim // 2 :]
         x_left = x_left * freqs_left.cos() - x_right * freqs_left.sin()
         x_right = x_left * freqs_right.sin() + x_right * freqs_right.cos()
 
@@ -29,6 +45,7 @@ class RotaryEmbedding(nn.Module):
         x = torch.cat([x_left, x_right], dim=-1)
 
         return x
+
 
 class ShortRope(nn.Module):
 
@@ -38,21 +55,26 @@ class ShortRope(nn.Module):
         self.dim = config.n_embd
 
         # Generate freqs of size n rather than full dim
-        self.register_buffer('freq_left', (10000 ** (torch.arange(0, self.n//2).float() / self.n//2)))
-        self.register_buffer('freq_right', (10000 ** (torch.arange(0, self.n//2).float() / self.n//2)))
+        self.register_buffer(
+            "freq_left", (10000 ** (torch.arange(0, self.n // 2).float() / self.n // 2))
+        )
+        self.register_buffer(
+            "freq_right",
+            (10000 ** (torch.arange(0, self.n // 2).float() / self.n // 2)),
+        )
 
     def forward(self, x):
         # Step 1: Get the input tensor shape
         batch_size, seq_len, _ = x.shape
 
         # Step 2: Split the input tensor into unrotated and rotated sections
-        x_unrotated = x[..., :-self.n]  # All but the last n dimensions
-        x_rotated = x[..., -self.n:]    # Only the last n dimensions
+        x_unrotated = x[..., : -self.n]  # All but the last n dimensions
+        x_rotated = x[..., -self.n :]  # Only the last n dimensions
 
         # Step 3: Generate rotation frequencies
         t = torch.arange(self.n, device=x.device)
-        freqs_left = torch.einsum('i,j->ij', t, self.freq_left)
-        freqs_right = torch.einsum('i,j->ij', t, self.freq_right)
+        freqs_left = torch.einsum("i,j->ij", t, self.freq_left)
+        freqs_right = torch.einsum("i,j->ij", t, self.freq_right)
 
         # Calculate how many times to repeat freqs along the sequence length
         num_repeats = seq_len // self.n + int(seq_len % self.n != 0)
@@ -66,8 +88,8 @@ class ShortRope(nn.Module):
         freqs_right = freqs_right[:, :seq_len, :]
 
         # Step 4: Process the x_rotated section
-        x_left = x_rotated[..., :self.n//2]
-        x_right = x_rotated[..., self.n//2:]
+        x_left = x_rotated[..., : self.n // 2]
+        x_right = x_rotated[..., self.n // 2 :]
 
         # Apply the cosine and sine rotations
         x_left = x_left * freqs_left.cos() - x_right * freqs_left.sin()
@@ -87,7 +109,7 @@ class ShortRope(nn.Module):
 
 class ROPE:
     # this will use cordic rather than rotation matrix
-    def __perform_2Drotation(cls, theta: float, vec2d: list) -> np.array:
+    def __perform_2Drotation(self, theta: float, vec2d: list) -> np.array:
         """rotate 2 dimensional vector by angle theta
 
         Args:
@@ -97,33 +119,28 @@ class ROPE:
         Returns:
             np.array: vec2d rotated by angle theta
         """
-        rotmatrx = cls.__get_2Drotation_matrix(theta)
-        return rotation_matrix @ vec2d
+        return self.rotator(theta, vec2d)
 
-    def __get_2Drotation_matrix(cls, theta: float) -> np.array:
-        """generate 2 dimensional vector rotation matrix to rotate a vector by angle theta
-
-        Args:
-            theta (float): the angle which this matrix will rotate the vector
-
-        Returns:
-            np.array: 2 by 2 matrix which when multiplied by a col vector will rotate it angle theta
-        """
-        return np.array(
-            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-        )
-
-    def __init__(self, embedding_len: int, base: int = 10000):
+    def __init__(
+        self,
+        embedding_len: int,
+        base: int = 10000,
+        rotator: Rotator = PerfectRotator(),
+    ):
         """setup ROPE calculation
 
         Args:
             embedding_len (int): length of input embedding vectors
             base (int): parameter to use as base for theta exponent
+            rotator (Rotator): instance of Rotator. Default is PerfectRotator.
 
         Raises:
             NotImplementedError: if embedding_len is odd (only even supported)
             ValueError: if embedding_len < 2 (at least 2 required)
         """
+        if not isinstance(rotator, Rotator):
+            raise TypeError("rotator must be a child of Rotator")
+        self.rotator = rotator
         # error checking
         embedding_len = int(embedding_len)
         if embedding_len % 2:
@@ -164,3 +181,9 @@ class ROPE:
             )
         return rotatedvec
 
+
+def ROPE_testsuite():
+    embedding_block = ROPE(8)
+    example_vector = [1, 2, 3, 4, 5, 6, 7, 8]
+    for m in range(5):
+        print("token pos", m, "\trotated vector", embedding_block(example_vector, m))
