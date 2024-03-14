@@ -1,5 +1,5 @@
 # PyPPA - PPA Analyzer Flow In Python
-PyPPA is a Python library for running Power Performance and Area (PPA) analysis and is based on the OpenROAD flow scripts. Planned features include switchable EDA tools, sweeping ranges of hyperparameters, optimization, and parallelized flows.
+PyPPA is a Python library for running Power Performance and Area (PPA) analysis and is based on [OpenFASoC](https://github.com/idea-fasoc/OpenFASOC) and the [OpenROAD flow scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts). Planned features include switchable EDA tools, sweeping ranges of hyperparameters, optimization, and parallelized flows.
 
 ### Getting Started
 PyPPA is entirely written in Python, except for the TCL scripts called by the EDA tools, and the platform (PDK).
