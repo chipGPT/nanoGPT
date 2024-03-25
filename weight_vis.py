@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import argparse
 import os
+import datetime
+
+timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 # Argument parser
 parser = argparse.ArgumentParser(description='Plot Transformer Weights')
@@ -43,14 +46,14 @@ if args.graph == 'matrix':
     plt.title(f'{args.weight} Matrix')
     plt.xlabel('Columns')
     plt.ylabel('Rows')
-    image_path = os.path.join(image_dir, f'{args.weight}_matrix.png')
+    image_path = os.path.join(image_dir, f'{args.weight}_matrix_{timestamp}.png')
 elif args.graph == 'histogram':
     flat_weights = weight_matrix.flatten().numpy()
     plt.hist(flat_weights, bins=50)
     plt.title(f'{args.weight} Histogram')
     plt.xlabel('Weight Value')
     plt.ylabel('Frequency')
-    image_path = os.path.join(image_dir, f'{args.weight}_histogram.png')
+    image_path = os.path.join(image_dir, f'{args.weight}_histogram_{timestamp}.png')
 
 # Save the image
 plt.savefig(image_path)
