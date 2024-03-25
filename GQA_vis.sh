@@ -20,7 +20,7 @@ for method in "${methods[@]}"; do
         # Escape special characters in the pattern
         escaped_pattern=$(echo "$pattern" | sed 's/[\&/]/\\&/g')
         # Use sed to remove the first # character from the four lines following the pattern
-        sed -i '' "/$escaped_pattern/{n;s/^#//;n;s/^#//;n;s/^#//;n;s/^#//}" "$file"
+        sed -i "/$escaped_pattern/{n;s/^#//;n;s/^#//;n;s/^#//;n;s/^#//}" "$file"
         sed -n '138,142p' model.py
 
 
