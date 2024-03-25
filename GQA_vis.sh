@@ -85,6 +85,7 @@ for method in "${methods[@]}"; do
     fi
 
     # Run your training script with the modified model.py
+    python3 data/shakespeare_char/prepare.py
     python3 train.py --out_dir=out --device=cuda --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=100 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
 
     python3 weight_vis.py
