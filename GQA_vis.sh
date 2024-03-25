@@ -8,6 +8,7 @@ cp model.py model_backup.py
 
 # Loop through each method
 for method in "${methods[@]}"; do
+    cp model_backup.py model.py
     echo "Testing method: $method"
 
     # Restore the original model.py file
@@ -29,11 +30,12 @@ for method in "${methods[@]}"; do
             echo $start_line
             echo $end_line
             sed -i "${start_line},${end_line}s/^ *#/                /" "$file"
-            # comment out the other implementations
         fi
+
+        
         pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
         file="model.py"
-       line_num=$(grep -n "$pattern" "$file" | sed '1d' | cut -d: -f1 | head -n 1)
+        line_num=$(grep -n "$pattern" "$file" | sed '1d' | cut -d: -f1 | head -n 1)
         echo $line_num
         if [ -n "$line_num" ]; then
             start_line=$line_num
@@ -45,17 +47,39 @@ for method in "${methods[@]}"; do
 
 
     elif [ "$method" == "choice_two" ]; then
-        sed -i 's/#Gating_q/Gating_q/' model.py
-        sed -i 's/Gating_kv/#Gating_kv/' model.py
-        sed -i 's/Gating_q_and_kv/#Gating_q_and_kv/' model.py
-    elif [ "$method" == "choice_three" ]; then
-        sed -i 's/#Gating_q_and_kv/Gating_q_and_kv/' model.py
-        sed -i 's/Gating_kv/#Gating_kv/' model.py
-        sed -i 's/Gating_q/#Gating_q/' model.py
-    fi
+        pattern="#Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
+        file="model.py"
+        # Find the line number where the pattern occurs
+        line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
+        #echo $line_num
+        if [ -n "$line_num" ]; then
+            # Calculate the line range for sed
+            start_line=$((line_num))
+            end_line=$((line_num + 7))
+
+            # Use sed to uncomment the specified line range
+            echo $start_line
+            echo $end_line
+            sed -i "${start_line},${end_line}s/^ *#/                /" "$file"
+            # comment out the other implementations
+        fi
+
+
+        pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
+        file="model.py"
+        line_num=$(grep -n "$pattern" "$file" | sed '1d' | cut -d: -f1 | head -n 1)
+        echo $line_num
+        if [ -n "$line_num" ]; then
+            start_line=$line_num
+            end_line=$((line_num + 6))
+            sed -i "${start_line},${end_line}s/^                /                ##/" "$file"
+        fi
+
+        sed -n '138,142p' model.py
+        sed -n '153,159p' model.py
 
     # Run your training script with the modified model.py
-    python3 train.py --out_dir=out --device=cuda --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=10000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
+    python3 train.py --out_dir=out --device=cuda --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=10 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
 
     python3 weight_vis.py
 done
