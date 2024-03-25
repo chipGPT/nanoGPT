@@ -85,7 +85,7 @@ for method in "${methods[@]}"; do
     fi
 
     python3 data/shakespeare_char/prepare.py
-    python3 train.py --out_dir=out --gate --n_kv_group=3 --eval_interval=50 --log_interval=1 --device=cpu --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=50000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
+    python3 train.py --out_dir=out --gate --n_kv_group=3 --eval_interval=50 --log_interval=1 --device=cpu --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=10000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
 
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_q.weight --graph matrix
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_k.weight --graph histogram
