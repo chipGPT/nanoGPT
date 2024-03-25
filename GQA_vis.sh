@@ -28,6 +28,7 @@ for method in "${methods[@]}"; do
             # Use sed to uncomment the specified line range
             sed -i "${start_line},${end_line}s/^#//" "$file"
         fi
+        sed -n '138,142p' model.py
 
 
     elif [ "$method" == "choice_two" ]; then
