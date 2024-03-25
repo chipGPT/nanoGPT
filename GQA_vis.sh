@@ -42,7 +42,7 @@ for method in "${methods[@]}"; do
             fi
         fi
         sed -n '138,142p' model.py
-        set -n '153,159p' model.py
+        #set -n '153,159p' model.py
 
 
     elif [ "$method" == "choice_two" ]; then
