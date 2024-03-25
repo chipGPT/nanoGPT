@@ -29,7 +29,7 @@ for method in "${methods[@]}"; do
             # Use sed to uncomment the specified line range
             echo $start_line
             echo $end_line
-            sed -i "${start_line},${end_line}s/^#//" "$file"
+            sed -i "${start_line},${end_line}s/^ *#//" "$file"
         fi
         sed -n '138,142p' model.py
 
