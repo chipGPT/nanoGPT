@@ -55,10 +55,11 @@ for method in "${methods[@]}"; do
     fi
 
     # Run your training script with the modified model.py
-    python3 train.py
+    python3 train.py --out_dir=out --device=cpu --eval_interval=2 --log_interval=1 
+    --block_size=2 --batch_size=2 --n_layer=2 --n_head=2 --n_embd=16 
+    --lr_decay_iters=2 --gate --dtype="float32" --max_iter=10000
 
-    # Optionally, you can save the output to a file specific to the method
-    # python3 train.py [other arguments] > output_$method.txt
+    python3 weight_vis.py
 done
 
 # Restore the original model.py file
