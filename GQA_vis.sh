@@ -19,7 +19,7 @@ for method in "${methods[@]}"; do
         file="model.py"
 
         # Find the line number where the pattern occurs
-        line_num=$(grep -n "$pattern" "$file" | cut -d: -f1)
+        line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
         if [ -n "$line_num" ]; then
             # Calculate the line range for sed
             start_line=$((line_num + 1))
