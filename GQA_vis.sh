@@ -17,11 +17,17 @@ for method in "${methods[@]}"; do
     if [ "$method" == "choice_one" ]; then
         pattern="#Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)"
         file="model.py"
-        # Escape special characters in the pattern
-        escaped_pattern=$(echo "$pattern" | sed 's/[\&/]/\\&/g')
-        # Use sed to remove the first # character from the four lines following the pattern
-        sed -i "/$escaped_pattern/{n;s/^#//;n;s/^#//;n;s/^#//;n;s/^#//}" "$file"
-        sed -n '138,142p' model.py
+
+        # Find the line number where the pattern occurs
+        line_num=$(grep -n "$pattern" "$file" | cut -d: -f1)
+        if [ -n "$line_num" ]; then
+            # Calculate the line range for sed
+            start_line=$((line_num + 1))
+            end_line=$((line_num + 4))
+
+            # Use sed to uncomment the specified line range
+            sed -i "${start_line},${end_line}s/^#//" "$file"
+        fi
 
 
     elif [ "$method" == "choice_two" ]; then
