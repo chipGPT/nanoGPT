@@ -17,7 +17,6 @@ for method in "${methods[@]}"; do
     if [ "$method" == "choice_one" ]; then
         pattern="#Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)"
         file="model.py"
-
         # Find the line number where the pattern occurs
         line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
         echo $line_num
@@ -31,16 +30,15 @@ for method in "${methods[@]}"; do
             echo $end_line
             sed -i "${start_line},${end_line}s/^ *#/                /" "$file"
             # comment out the other implementations
-            pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
-            file="model.py"
-            line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
-            echo $line_num
-
-            if [ -n "$line_num" ]; then
-                start_line=$line_num
-                end_line=$((line_num + 6))
-                sed -i "${start_line},${end_line}s/^                /##/" "$file"
-            fi
+        fi
+        pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
+        file="model.py"
+        line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
+        echo $line_num
+        if [ -n "$line_num" ]; then
+            start_line=$line_num
+            end_line=$((line_num + 6))
+            sed -i "${start_line},${end_line}s/^                /##/" "$file"
         fi
         sed -n '138,142p' model.py
         sed -n '153,159p' model.py
