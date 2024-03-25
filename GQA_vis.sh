@@ -38,7 +38,7 @@ for method in "${methods[@]}"; do
         if [ -n "$line_num" ]; then
             start_line=$line_num
             end_line=$((line_num + 6))
-            sed -i "${start_line},${end_line}s/^                /##/" "$file"
+            sed -i "${start_line},${end_line}s/^                /                ##/" "$file"
         fi
         sed -n '138,142p' model.py
         sed -n '153,159p' model.py
