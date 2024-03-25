@@ -9,6 +9,8 @@ cp model.py model_backup.py
 # Loop through each method
 for method in "${methods[@]}"; do
     cp model_backup.py model.py
+    sed -n '138,142p' model.py
+    sed -n '153,159p' model.py
     echo "Testing method: $method"
 
     # Restore the original model.py file
