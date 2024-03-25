@@ -35,6 +35,8 @@ image_dir = 'images'
 os.makedirs(image_dir, exist_ok=True)
 
 # Plotting
+if weight_matrix.is_cuda:
+    weight_matrix = weight_matrix.cpu()
 if args.graph == 'matrix':
     plt.figure(figsize=(10, 8))
     sns.heatmap(weight_matrix, cmap='viridis', annot=True)
