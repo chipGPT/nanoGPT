@@ -33,7 +33,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          python3 -m pip install numpy transformers datasets tiktoken wandb tqdm tensorboard matplotlib seborn
+          python3 -m pip install numpy transformers datasets tiktoken wandb tqdm tensorboard matplotlib seaborn
           python3 -m pip install -r requirements_cpu.txt
 
       - name: Run GQA_vis.sh script
@@ -45,4 +45,4 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: results
-          path: out/
+          path: images/
