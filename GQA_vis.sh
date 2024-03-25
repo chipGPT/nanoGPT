@@ -34,6 +34,7 @@ for method in "${methods[@]}"; do
             pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
             file="model.py"
             line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
+            echo $line_num
 
             if [ -n "$line_num" ]; then
                 start_line=$line_num
