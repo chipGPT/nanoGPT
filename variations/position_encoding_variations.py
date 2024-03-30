@@ -108,29 +108,80 @@ class ShortRope(nn.Module):
         return x
 
 
+# the following functions emulate hardware rotations with exact rotations
 
+# return the remaining rotation
+def trivial_rotation(theta: float):
+        # place theta within -pi to pi
+        theta = theta % (2 * math.pi)
+        sgn = lambda a: 1 if a > 0 else -1
+        if abs(theta) > math.pi:
+            theta += -sgn(theta) * 2 * math.pi
+        # trivial rotation
+        theta_gt_piby4 = abs(theta) > (math.pi / 4)
+        theta_gt_3piby4 = abs(theta) > (3 * math.pi / 4)
+        # update theta
+        rotmag = math.pi if theta_gt_3piby4 else (math.pi / 2 if theta_gt_piby4 else 0)
+        rtheta = theta + (-sgn(theta) * rotmag)
+        return rtheta
+
+# return the remaining rotation
+def friend_angles(theta: float) -> float:
+    # friend angles +- 36.87, 16.26, 0 degrees
+    sgn = 1 if theta > 0 else -1
+    if abs(theta) < math.radians(16.26 / 2):  # 0 rotation
+        pass
+    elif abs(theta) < math.radians((36.87 + 16.26) / 2):  # 16.26 degree rotation
+        theta -= sgn * math.radians(16.26)
+    else:  # 36.87 degree rotation
+        theta -= sgn * math.radians(36.87)
+    return theta
+
+# return the remaining rotation
+def USRcordic(theta: float) -> float:
+    # USR CORDIC (K=4, +-7.125 degrees or 0 rotation)
+    rotdir = 0 if abs(theta) < math.radians(3.5) else (2 * int(theta > 0) - 1)
+    if rotdir == 0:
+        return theta
+    elif rotdir == 1:
+        return theta-math.radians(7.125)
+    else:
+        return theta+math.radians(7.125)
+
+# how much would CORDIC actually rotate for this theta
 def cordic_ang(theta: float):
-    # precompute thetas
+    rtheta = trivial_rotation(theta)
+    first_rotation = theta - rtheta
+    # compute rotation angles
     NITER = 5
     pcthetas = list()
     for tanexp in range(NITER):
         pcthetas.append(math.atan(2 ** (-tanexp)))
-    # precompute cos correction factor
-    coscorrection = float("1")
-    for pctheta in pcthetas:
-        coscorrection *= math.cos(pctheta)
     # init values and perform n rotations
     current_rotation = float("0")
-    for tanexp, pctheta in enumerate(pcthetas):
-        tantheta = 2 ** (-tanexp)
-        if current_rotation > theta:
+    for pctheta in pcthetas:
+        if current_rotation > rtheta:
             current_rotation -= pctheta
         else:
             current_rotation += pctheta
-    return current_rotation
+    return current_rotation + first_rotation
+
+# how much would CORDIC II actually rotate for this theta
+def cordicII_ang(theta: float):
+    rtheta = trivial_rotation(theta)
+    current_rotation = rtheta - theta
+    rtheta = friend_angles(rtheta)
+    current_rotation = rtheta - theta
+    rtheta = USRcordic(rtheta)
+    return -(rtheta - theta)
+
 
 def cordic_ang_all(thetas: torch.tensor):
     return torch.tensor([cordic_ang(theta) for theta in thetas])
+
+def cordicII_ang_all(thetas: torch.tensor):
+    return torch.tensor([cordicII_ang(theta) for theta in thetas])
+
 
 
 class ROPE(torch.nn.Module):
@@ -157,7 +208,7 @@ class ROPE(torch.nn.Module):
         """
         # compute rotations in pairs (each pair corresponds to a theta)
         rotations = m*self.repeated_thetas
-        rot = "cordic"
+        rot = "cordicII"
         if rot == "perfect":
             sin_ests = torch.sin(rotations)
             cos_ests = torch.cos(rotations)
@@ -167,6 +218,9 @@ class ROPE(torch.nn.Module):
         elif rot == "cordic":
             sin_ests = 1.57*torch.sin(cordic_ang_all(rotations))
             cos_ests = 1.57*torch.sin(cordic_ang_all(rotations))
+        elif rot == "cordicII":
+            sin_ests = 1.57*torch.sin(cordicII_ang_all(rotations))
+            cos_ests = 1.57*torch.sin(cordicII_ang_all(rotations))
         swapped_vec = torch.flip(vec.view(-1,2),dims=(1,))
         neg_swapped_vec = torch.cat((-swapped_vec[:,0],swapped_vec[:,1])).view(2,-1).transpose(0,1).reshape(-1)
         return cos_ests @ vec + sin_ests @ neg_swapped_vec
