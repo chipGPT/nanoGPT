@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import math
 from vector2d_rotator_variations import (
     Rotator,
     PerfectRotator,
@@ -107,83 +108,79 @@ class ShortRope(nn.Module):
         return x
 
 
-class ROPE:
-    # this will use cordic rather than rotation matrix
-    def __perform_2Drotation(self, theta: float, vec2d: list) -> np.array:
-        """rotate 2 dimensional vector by angle theta
 
-        Args:
-            theta (float): the angle which this matrix will rotate the vector
-            vec2d (list): the vector of length 2 that will be rotated
+def cordic_ang(theta: float):
+    # precompute thetas
+    NITER = 5
+    pcthetas = list()
+    for tanexp in range(NITER):
+        pcthetas.append(math.atan(2 ** (-tanexp)))
+    # precompute cos correction factor
+    coscorrection = float("1")
+    for pctheta in pcthetas:
+        coscorrection *= math.cos(pctheta)
+    # init values and perform n rotations
+    current_rotation = float("0")
+    for tanexp, pctheta in enumerate(pcthetas):
+        tantheta = 2 ** (-tanexp)
+        if current_rotation > theta:
+            current_rotation -= pctheta
+        else:
+            current_rotation += pctheta
+    return current_rotation
 
-        Returns:
-            np.array: vec2d rotated by angle theta
-        """
-        return self.rotator(theta, vec2d)
+def cordic_ang_all(thetas: torch.tensor):
+    return torch.tensor([cordic_ang(theta) for theta in thetas])
 
-    def __init__(
-        self,
-        embedding_len: int,
-        base: int = 10000,
-        rotator: Rotator = PerfectRotator(),
-    ):
-        """setup ROPE calculation
 
-        Args:
-            embedding_len (int): length of input embedding vectors
-            base (int): parameter to use as base for theta exponent
-            rotator (Rotator): instance of Rotator. Default is PerfectRotator.
-
-        Raises:
-            NotImplementedError: if embedding_len is odd (only even supported)
-            ValueError: if embedding_len < 2 (at least 2 required)
-        """
-        if not isinstance(rotator, Rotator):
-            raise TypeError("rotator must be a child of Rotator")
-        self.rotator = rotator
-        # error checking
-        embedding_len = int(embedding_len)
-        if embedding_len % 2:
-            raise NotImplementedError("ROPE support only even dimensionality vectors")
-        if embedding_len < 2:
-            raise ValueError("embedding length must be at least 2")
+class ROPE(torch.nn.Module):
+    #ROPE support only even dimensionality vectors
+    #embedding length must be at least 2
+    def __init__(self, embedding_len: int, base: int = 10000):
+        super().__init__()
         # compute rotation angles for each pair
-        self.input_len = embedding_len
         num_blocks = embedding_len // 2
-        self.thetas = [base ** (-2 * i / embedding_len) for i in range(num_blocks)]
-        print(self.thetas)
+        thetas = torch.tensor([base ** (-2 * i / embedding_len) for i in range(num_blocks)])
+        repeated_thetas = thetas.repeat_interleave(2)
+        self.register_buffer("repeated_thetas", repeated_thetas)
 
-    def __call__(self, vec: np.array, m: int) -> np.array:
+    #postion 'm' must be positive
+    def forward(self, vec: torch.tensor, m: int) -> torch.tensor:
         """perform ROPE positional embedding
 
         Args:
-            vec (np.array): input vector to rotate
+            vec (torch.tensor): input vector to rotate
             m (int): position (0th position means the first token)
 
-        Raises:
-            ValueError: if m is negative
-            ValueError: length of input vector does not match expected length
-
         Returns:
-            np.array: vector with ROPE positional embedding
+            torch.tensor: ROPE positional embedding
         """
-        vec = np.array(vec)  # ensure input is np.array
-        if m < 0:
-            raise ValueError("postion 'm' must be positive")
-        if len(vec) != self.input_len:
-            raise ValueError(f"input vector must be length {self.input_len}")
         # compute rotations in pairs (each pair corresponds to a theta)
-        rotatedvec = np.zeros(vec.shape)
-        # import pdb; pdb.set_trace()
-        for i, theta in enumerate(self.thetas):
-            rotatedvec[2 * i : 2 * i + 2] = self.__perform_2Drotation(
-                theta * m, vec[2 * i : 2 * i + 2]
-            )
-        return rotatedvec
+        rotations = m*self.repeated_thetas
+        rot = "cordic"
+        if rot == "perfect":
+            sin_ests = torch.sin(rotations)
+            cos_ests = torch.cos(rotations)
+        elif rot == "foe":
+            sin_ests = rotations
+            cos_ests = 1 - torch.sign(rotations) * rotations / 4
+        elif rot == "cordic":
+            sin_ests = 1.57*torch.sin(cordic_ang_all(rotations))
+            cos_ests = 1.57*torch.sin(cordic_ang_all(rotations))
+        swapped_vec = torch.flip(vec.view(-1,2),dims=(1,))
+        neg_swapped_vec = torch.cat((-swapped_vec[:,0],swapped_vec[:,1])).view(2,-1).transpose(0,1).reshape(-1)
+        return cos_ests @ vec + sin_ests @ neg_swapped_vec
+
 
 
 def ROPE_testsuite():
     embedding_block = ROPE(8)
-    example_vector = [1, 2, 3, 4, 5, 6, 7, 8]
+    example_vector = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],requires_grad=True)
     for m in range(5):
+        # create a random function to see if it is possible to backprop
+        result = torch.sum(embedding_block(example_vector, m))
+        result.backward()
+        print("grad",result)
+        result.grad=None
         print("token pos", m, "\trotated vector", embedding_block(example_vector, m))
+
