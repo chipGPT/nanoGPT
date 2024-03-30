@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Define an array of method names
+# Define an array of three implementatinos of GQA with Gating
 methods=("choice_one" "choice_two" "choice_three")
 
 # Backup the original model.py file
@@ -9,8 +9,6 @@ cp model.py model_backup.py
 # Loop through each method
 for method in "${methods[@]}"; do
     cp model_backup.py model.py
-    sed -n '138,142p' model.py
-    sed -n '153,159p' model.py
     echo "Testing method: $method"
 
     # Restore the original model.py file
@@ -20,11 +18,11 @@ for method in "${methods[@]}"; do
     if [ "$method" == "choice_one" ]; then
         pattern="#Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)"
         file="model.py"
-        # Find the line number where the pattern occurs
+        # Find the line number where the pattern occurs, as well as the implementaion we want to test
         line_num=$(grep -n "$pattern" "$file" | cut -d: -f1 | head -n 1)
         #echo $line_num
         if [ -n "$line_num" ]; then
-            # Calculate the line range for sed
+            # Calculate the line range for sed to delete the initial #
             start_line=$((line_num))
             end_line=$((line_num + 4))
 
@@ -44,9 +42,7 @@ for method in "${methods[@]}"; do
             end_line=$((line_num + 6))
             sed -i "${start_line},${end_line}s/^                /                ##/" "$file"
         fi
-        sed -n '138,142p' model.py
-        sed -n '153,159p' model.py
-
+        sed -n $start_line,$end_line'p' model.py
 
     elif [ "$method" == "choice_two" ]; then
         pattern="#Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
@@ -64,10 +60,10 @@ for method in "${methods[@]}"; do
             echo $start_line
             echo $end_line
             sed -i "${start_line},${end_line}s/^ *#/                /" "$file"
-            # comment out the other implementations
+            
         fi
 
-
+        # comment out the other implementations
         pattern="Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)"
         file="model.py"
         line_num=$(grep -n "$pattern" "$file" | sed '1d' | cut -d: -f1 | head -n 1)
@@ -78,8 +74,6 @@ for method in "${methods[@]}"; do
             sed -i "${start_line},${end_line}s/^                /                ##/" "$file"
         fi
 
-        sed -n '138,142p' model.py
-        sed -n '153,159p' model.py
     elif [ "$method" == "choice_three" ]; then
         :
     fi
