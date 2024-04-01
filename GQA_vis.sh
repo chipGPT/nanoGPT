@@ -109,10 +109,10 @@
     python3 weight_vis.py --weight transformer.h.3.attn.c_attn_q.weight --graph histogram
     python3 weight_vis.py --weight transformer.h.3.attn.c_attn_k.weight --graph matrix
     python3 weight_vis.py --weight transformer.h.3.attn.c_attn_v.weight --graph histogram
-done
+#done
 
 # Restore the original model.py file
-cp model_backup.py model.py
+#cp model_backup.py model.py
 
 # Remove the backup file
-rm model_backup.py
+#rm model_backup.py
