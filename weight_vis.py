@@ -4,6 +4,7 @@ import seaborn as sns
 import argparse
 import os
 import datetime
+import numpy as np
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -49,8 +50,10 @@ if args.graph == 'matrix':
     image_path = os.path.join(image_dir, f'{args.weight}_matrix_{timestamp}.png')
 elif args.graph == 'histogram':
     flat_weights = weight_matrix.flatten().numpy()
+    mean = np.mean(flat_weights)
+    std_dev = np.std(flat_weights)
     plt.hist(flat_weights, bins=50)
-    plt.title(f'{args.weight} Histogram')
+    plt.title(f'{args.weight} Histogram\nMean: {mean:.4f}, Std Dev: {std_dev:.4f}')
     plt.xlabel('Weight Value')
     plt.ylabel('Frequency')
     image_path = os.path.join(image_dir, f'{args.weight}_histogram_{timestamp}.png')
