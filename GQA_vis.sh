@@ -80,7 +80,7 @@ for method in "${methods[@]}"; do
 
     python3 data/shakespeare_char/prepare.py
     #python3 train.py --out_dir=out --gate --n_kv_group=2 --eval_interval=50 --log_interval=1 --device=cpu --block_size=128 --batch_size=8 --n_layer=2 --n_head=4 --n_embd=16 --lr_decay_iters=2 --gate --dtype="float32" --max_iter=30000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
-    python3 train.py --out_dir=out --n_kv_group=2 --eval_interval=50 --log_interval=1 --device=cpu --block_size=128 --batch_size=8 --n_layer=2 --n_head=2 --n_embd=16 --lr_decay_iters=2 --dtype="float32" --max_iter=30000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
+    python3 train.py --out_dir=out --n_kv_group=2 --eval_interval=50 --log_interval=1 --device=cpu --block_size=128 --batch_size=8 --n_layer=4 --n_head=2 --n_embd=16 --lr_decay_iters=2 --dtype="float32" --max_iter=8000 --no-use_rotary_embeddings --use_abs_pos_embeddings --use_abs_pos_embeddings --no-use_post_ln
 
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_q.weight --graph matrix
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_k.weight --graph histogram
@@ -88,6 +88,27 @@ for method in "${methods[@]}"; do
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_q.weight --graph histogram
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_k.weight --graph matrix
     python3 weight_vis.py --weight transformer.h.0.attn.c_attn_v.weight --graph histogram
+
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_q.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_k.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_v.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_q.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_k.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.1.attn.c_attn_v.weight --graph histogram
+
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_q.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_k.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_v.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_q.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_k.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.2.attn.c_attn_v.weight --graph histogram
+
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_q.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_k.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_v.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_q.weight --graph histogram
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_k.weight --graph matrix
+    python3 weight_vis.py --weight transformer.h.3.attn.c_attn_v.weight --graph histogram
 done
 
 # Restore the original model.py file
