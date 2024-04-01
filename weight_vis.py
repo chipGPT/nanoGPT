@@ -5,6 +5,7 @@ import argparse
 import os
 import datetime
 import numpy as np
+from scipy.stats import kurtosis
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -60,8 +61,9 @@ elif args.graph == 'histogram':
     flat_weights = weight_matrix.flatten().numpy()
     mean = np.mean(flat_weights)
     std_dev = np.std(flat_weights)
+    kurt = kurtosis(flat_weights, fisher=True)
     plt.hist(flat_weights, bins=50)
-    plt.title(f'{args.weight} Histogram\nMean: {mean:.4f}, Std Dev: {std_dev:.4f}')
+    plt.title(f'{args.weight} Histogram\nMean: {mean:.4f}, Std Dev: {std_dev:.4f}, Kurtosis: {kurt:.4f}')
     plt.xlabel('Weight Value')
     plt.ylabel('Frequency')
     image_path = os.path.join(image_dir, f'{args.weight}_histogram_{timestamp}.png')
