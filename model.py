@@ -18,7 +18,7 @@ from torch.nn import functional as F
 
 # Variations
 from variations.softmax_variations import Softermax, Constantmax, Constantmax_quan, Strongermax, Polymax, SigSoftmax, ExpPolymax, SaturatingConSmax
-from variations.normalization_variations import LayerNorm, RMSNorm
+from variations.normalization_variations import LayerNorm, RMSNorm, PowerNorm, GroupNorm, InstanceNorm, BatchNorm, PowerNorm2, PowerNorm3, PowerNorm5
 from variations.position_encoding_variations import RotaryEmbedding, ShortRope, SymmetricalOverlapAngularPositions
 from variations.activation_variations import SquaredReLU, activation_dictionary
 
@@ -266,13 +266,36 @@ class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
         super().__init__()
 
-        if config.layernorm_variant == 'rmsnorm':
-            self.ln_1 = RMSNorm(config.n_embd)
-            self.ln_2 = RMSNorm(config.n_embd)
-
-        if config.layernorm_variant == 'layernorm':
+        if config.layernorm_variant == "layernorm":
             self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
             self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        elif config.layernorm_variant == "rmsnorm":
+            self.ln_1 = RMSNorm(config.n_embd)
+            self.ln_2 = RMSNorm(config.n_embd)
+        elif config.layernorm_variant == "powernorm":
+            self.ln_1 = PowerNorm(config.n_embd)
+            self.ln_2 = PowerNorm(config.n_embd)
+        elif config.layernorm_variant == "powernorm2":
+            self.ln_1 = PowerNorm2(config.n_embd)
+            self.ln_2 = PowerNorm2(config.n_embd)
+        elif config.layernorm_variant == "powernorm3":
+            self.ln_1 = PowerNorm3(config.n_embd)
+            self.ln_2 = PowerNorm3(config.n_embd)
+        elif config.layernorm_variant == "powernorm5":
+            self.ln_1 = PowerNorm5(config.n_embd)
+            self.ln_2 = PowerNorm5(config.n_embd)
+        elif config.layernorm_variant == "groupnorm":
+            self.ln_1 = GroupNorm(num_groups=config.n_head, num_channels=config.n_embd)
+            self.ln_2 = GroupNorm(num_groups=config.n_head, num_channels=config.n_embd)
+        elif config.layernorm_variant == "instancenorm":
+            self.ln_1 = InstanceNorm(num_features=config.n_embd)
+            self.ln_2 = InstanceNorm(num_features=config.n_embd)
+        elif config.layernorm_variant == "batchnorm":
+            self.ln_1 = BatchNorm(num_features=config.n_embd)
+            self.ln_2 = BatchNorm(num_features=config.n_embd)
+        else:
+            raise ValueError(f"Unsupported layernorm_variant: {config.layernorm_variant}")
+
 
         self.use_post_ln = config.use_post_ln
 
@@ -363,6 +386,7 @@ class GPTConfig:
 
     # Layernorm Alternatives and Options
     layernorm_variant: str = "rmsnorm" # Current options "rmsnorm" or "layernorm"
+    layernorm_variant_output: str = "rmsnorm" # Current options "rmsnorm" or "layernorm"
     bias: bool = False # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
     # Activation Alternatives
@@ -377,10 +401,24 @@ class GPT(nn.Module):
 
         self.config = config
 
-        if config.layernorm_variant == "layernorm":
-            self.normalization_variant = LayerNorm(config.n_embd, bias=config.bias)
-        if config.layernorm_variant == "rmsnorm":
-            self.normalization_variant = RMSNorm(config.n_embd)
+        if config.layernorm_variant_output == "layernorm":
+            self.normalization_variant_output = LayerNorm(config.n_embd, bias=config.bias)
+        elif config.layernorm_variant_output == "rmsnorm":
+            self.normalization_variant_output = RMSNorm(config.n_embd)
+        elif config.layernorm_variant_output == "powernorm":
+            self.normalization_variant_output = PowerNorm(config.n_embd)
+        elif config.layernorm_variant_output == "powernorm2":
+            self.normalization_variant_output = PowerNorm2(config.n_embd)
+        elif config.layernorm_variant_output == "powernorm3":
+            self.normalization_variant_output = PowerNorm3(config.n_embd)
+        elif config.layernorm_variant_output == "groupnorm":
+            self.normalization_variant_output = GroupNorm(num_groups=config.n_head, num_channels=config.n_embd)
+        elif config.layernorm_variant_output == "instancenorm":
+            self.normalization_variant_output = InstanceNorm(num_features=config.n_embd)
+        elif config.layernorm_variant_output == "batchnorm":
+            self.normalization_variant_output = BatchNorm(num_features=config.n_embd)
+        else:
+            raise ValueError(f"Unsupported layernorm_variant_output: {config.layernorm_variant_output}")
 
         # Shared Parameters MLP
         shared_mlp_array = create_shared_param_group("mlp", config)
@@ -392,7 +430,7 @@ class GPT(nn.Module):
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
-            ln_f = self.normalization_variant,
+            ln_f = self.normalization_variant_output,
         ))
 
         # Select softmax variant for output layer

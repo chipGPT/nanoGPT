@@ -1,0 +1,21 @@
+[
+    {
+      "max_iters": ["3500"],
+      "n_layer": ["6"],
+      "n_head": ["6"],
+      "n_embd": ["384"],
+      "block_size":["256"],
+      "use_post_ln": [false],
+      "device": ["cuda"],
+      "dtype": ["bfloat16"],
+      "dataset": ["shakespeare_char"],
+      "use_rotary_embeddings": [false],
+      "use_abs_pos_embeddings": [true],
+      "compile": [false],
+      "softmax_variant_attn": ["softmax", "polymax"],
+      "layernorm_variant": ["powernorm", "powernorm2", "powernorm3", "powernorm5"],
+      "layernorm_variant_output": ["layernorm", "rmsnorm"],
+      "tensorboard_run_name": ["powernorm_sweep_abs"]
+    }
+  ]
+

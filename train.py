@@ -66,7 +66,17 @@ def parse_args():
     model_group.add_argument('--shared_attn_sym', default=False, action=argparse.BooleanOptionalAction, help="symmetrical attention sharing")
 
     # NORM VARIATIONS
-    model_group.add_argument("--layernorm_variant", type=str, default="rmsnorm", choices=["rmsnorm", "layernorm"])
+    model_group.add_argument("--layernorm_variant", type=str, default="rmsnorm",
+                             choices=["rmsnorm",
+                                      "layernorm",
+                                      "powernorm",
+                                      "powernorm2",
+                                      "powernorm3",
+                                      "powernorm5",
+                                      "groupnorm",
+                                      "instancenorm",
+                                      "batchnorm"])
+    model_group.add_argument("--layernorm_variant_output", type=str, default="rmsnorm", choices=["rmsnorm", "layernorm","powernorm", "groupnorm", "instancenorm", "batchnorm"])
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
 
     # ACTIVATION VARIATIONS
