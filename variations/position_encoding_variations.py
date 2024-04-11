@@ -2,14 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from vector2d_rotator_variations import (
-    Rotator,
-    PerfectRotator,
-    CORDIC1959,
-    FOE,
-    DoubleFOE,
-    DoubleFOE_Advanced,
-)
 
 
 class RotaryEmbedding(nn.Module):
