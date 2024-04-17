@@ -337,10 +337,12 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_kv_group: int = 12
+    n_chan: int = 14
     n_embd: int = 768
     dropout: float = 0.0
     window_size: int = 128
     gate: bool = False
+    vector_embeddings: bool = True
 
     use_parallel_mlp: bool = False
 
@@ -412,7 +414,7 @@ class GPT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert config.vocab_size is not None
+        # assert config.vocab_size is not None
         assert config.block_size is not None
 
         self.config = config
@@ -427,8 +429,24 @@ class GPT(nn.Module):
         # Shared Parameters Attention
         shared_attn_array = create_shared_param_group("attn", config)
 
+        # wte = None
+        # if config.vector_embeddings:
+        #     wte = nn.Sequential(
+        #         nn.Linear(config.n_chan, config.n_embd),
+        #         nn.ReLU(),
+        #         nn.Linear(config.n_embd, config.n_embd),
+        #         nn.ReLU(),
+        #         ),
+        # else:
+        #     wte = nn.Embedding(config.vocab_size, config.n_embd)
+
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = nn.Sequential(
+                nn.Linear(config.n_chan, config.n_embd),
+                nn.ReLU(),
+                nn.Linear(config.n_embd, config.n_embd),
+                nn.ReLU(),
+                ),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
@@ -456,7 +474,9 @@ class GPT(nn.Module):
             if self.softmax_variant_output == "sigsoftmax":
               self.softmax_layer_output = SigSoftmax(config)
 
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.n_embd, config.n_chan - 4, bias=False) # 4 channels of time
+
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -495,18 +515,14 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None):
         device = idx.device
-        b, t = idx.size()
+        b, t, ch = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        x = None
-        if self.config.use_abs_pos_embeddings:
-          pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-          x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-          x = self.transformer.drop(tok_emb)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -514,7 +530,7 @@ class GPT(nn.Module):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.huber_loss(logits, targets)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
@@ -634,32 +650,23 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, ts, max_new_tokens, temperature=0.0):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens):
+        for i, t in zip(range(max_new_tokens), ts):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-
-            probs = None
-            if self.config.softmax_variant_output != 'softmax':
-                probs = self.softmax_layer_output(logits)
-            else:
-                probs = F.softmax(logits, dim=-1)
-            assert probs != None
-            idx_next = torch.multinomial(probs, num_samples=1)
+            idx_next = logits + (torch.randn(logits.size())*temperature).to(logits.device)
+            t = t.unsqueeze(0).unsqueeze(0).tile((logits.shape[0], 1, 1))
+            assert t.shape == (logits.shape[0], 1, 4)
+            idx_next = torch.cat((idx_next, t), dim=-1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+

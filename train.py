@@ -212,6 +212,10 @@ class Trainer:
         self.model_group = model_group
         self.setup()
 
+        self.model_args = {action.dest: getattr(self.args, action.dest) for action in self.model_group._group_actions}
+        self.model_args['n_chan'] = 14  # 10 ClearSky, 4 time channels
+
+
     def setup(self):
         # Setup DDP
         self.ddp = int(os.environ.get('RANK', -1)) != -1
@@ -255,7 +259,7 @@ class Trainer:
         self.model_args['vocab_size'] = None
 
         if self.args.init_from == 'scratch':
-            self.model_args['vocab_size'] = self.get_vocab_size_from_meta()
+            # self.model_args['vocab_size'] = self.get_vocab_size_from_meta()
             self.load_data()
             gptconf = GPTConfig(**self.model_args)
             self.model = GPT(gptconf)
@@ -353,18 +357,35 @@ class Trainer:
             sys.exit(f"Error: File not found - {meta_path}")
 
     def load_data(self):
-        if self.model_args['vocab_size'] is None:
-            sys.exit("Error: no vocab size specified")
-        elif self.model_args['vocab_size'] == 100277:
-            # cl100k_base, vocab size 100277, requires np.uint32
-            self.train_data = np.memmap(os.path.join('data', self.args.dataset, 'train.bin'), dtype=np.uint32, mode='r')
-            self.val_data = np.memmap(os.path.join('data', self.args.dataset, 'val.bin'), dtype=np.uint32, mode='r')
-        else:
-            # all other tokenations so far require only np.uint16
-            self.train_data = np.memmap(os.path.join('data', self.args.dataset, 'train.bin'), dtype=np.uint16, mode='r')
-            self.val_data = np.memmap(os.path.join('data', self.args.dataset, 'val.bin'), dtype=np.uint16, mode='r')
+        data_dir = os.path.abspath('data/vector/data/')
+        self.train_data = [
+            np.load(os.path.join(data_dir, f'TL{i:02d}_train.npy'), mmap_mode="r+")
+            for i in range(1, 5)
+        ]
+        self.val_data = [
+            np.load(os.path.join(data_dir, f'TL{i:02d}_test.npy'), mmap_mode="r+")
+            for i in range(1, 5)
+        ]
 
     def get_batch(self, split):
+        if split == 'train':
+            data = self.train_data[np.random.randint(len(self.train_data))]
+        else:
+            data = self.val_data[np.random.randint(len(self.val_data))]
+
+        max_offset_i = max(1, data.shape[0] - self.args.block_size)
+        max_offset_j = max(1, data.shape[1] - self.args.block_size)
+
+        ii = torch.randint(0, max_offset_i, (self.args.batch_size,))
+        jj = torch.randint(0, max_offset_j, (self.args.batch_size,))
+
+        x = torch.stack([torch.from_numpy(data[i:i+self.args.block_size, :14].astype(float)) for i in ii])
+        y = torch.stack([torch.from_numpy(data[i+1:i+1+self.args.block_size, :10].astype(float)) for i in ii])
+
+        x, y = x.to(self.device).float(), y.to(self.device).float()
+        return x, y
+
+    def get_batch_old(self, split):
         data = self.train_data if split == 'train' else self.val_data
         ix = torch.randint(len(data) - self.args.block_size, (self.args.batch_size,))
         x = torch.stack([torch.from_numpy((data[i:i+self.args.block_size]).astype(np.int64)) for i in ix])
