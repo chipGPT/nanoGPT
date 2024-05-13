@@ -672,7 +672,7 @@ class Trainer:
 
 
 
-            if self.args.softmax_variant_attn == "constantmax":
+            if self.args.softmax_variant_attn in ['consmax', 'polymax', 'strongermax']:
                 betas = []
                 gammas = []
                 i_sum_vals = []
@@ -689,7 +689,7 @@ class Trainer:
 
                 for layer in range (self.args.n_layer):
                     # Inputs
-                    inputs_location = f"transformer.h[{layer}].attn.softmax_layer.inputs"
+                    inputs_location = f"transformer.h[{layer}].attn.softmax_layer_attn.inputs"
                     
                     softmax_input = eval(f"self.model.{inputs_location}").to('cpu').to(torch.float32)
                     
@@ -731,7 +731,7 @@ class Trainer:
 
 
 
-                    outputs_location = f"transformer.h[{layer}].attn.softmax_layer.outputs"
+                    outputs_location = f"transformer.h[{layer}].attn.softmax_layer_attn.outputs"
                     softmax_output = eval(f"self.model.{outputs_location}").to('cpu').to(torch.float32)
                    
                     o_first_batch = softmax_output[0]
@@ -759,18 +759,19 @@ class Trainer:
                         self.stats['o_max'][layer][i].append(torch.max(torch.where(torch.isnan(o_head), torch.tensor(float('-inf')), o_head)).item())
 
                     #BETA GAMMA
-                    gamma_location = f"transformer.h[{layer}].attn.softmax_layer.gamma"
-                    beta_location = f"transformer.h[{layer}].attn.softmax_layer.beta"
+                    if self.args.softmax_variant_attn == 'consmax':
+                        gamma_location = f"transformer.h[{layer}].attn.softmax_layer_attn.gamma"
+                        beta_location = f"transformer.h[{layer}].attn.softmax_layer_attn.beta"
 
-                    gamma = eval(f"self.model.{gamma_location}")
-                    gammas.append(gamma[0].item()) # are there more than just gamma 0?
-                    # print("gammas",gamma) # are there more than just gamma 0?
+                        gamma = eval(f"self.model.{gamma_location}")
+                        gammas.append(gamma[0].item()) # are there more than just gamma 0?
+                        # print("gammas",gamma) # are there more than just gamma 0?
 
-                    beta = eval(f"self.model.{beta_location}")
-                    betas.append(beta[0].item()) # are there more than just beta 0?
-                    # print("betas",beta,) # are there more than just beta 0?
+                        beta = eval(f"self.model.{beta_location}")
+                        betas.append(beta[0].item()) # are there more than just beta 0?
+                        # print("betas",beta,) # are there more than just beta 0?
 
-                    self.log_gamma_beta(gamma, beta, self.iter_num, layer)
+                        self.log_gamma_beta(gamma, beta, self.iter_num, layer)
 
 
                 self.write_to_csv(self.iter_num,
@@ -788,7 +789,8 @@ class Trainer:
                                   *o_stdevs,
                                   *o_max_values,
                                   prefix="outputs")
-                self.write_to_csv(self.iter_num, *betas, *gammas, prefix="beta_gamma")
+                if self.args.softmax_variant_attn == 'consmax':
+                    self.write_to_csv(self.iter_num, *betas, *gammas, prefix="beta_gamma")
 
             """
             if self.iter_num % 50 == 0:

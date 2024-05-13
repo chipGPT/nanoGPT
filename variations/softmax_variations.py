@@ -116,8 +116,11 @@ class Strongermax(nn.Module):
         self.subtract_max = config.strongermax_use_xmax
         self.sum_to_1 = config.strongermax_sum_to_1
         self.divisor = config.strongermax_divisor
+        self.inputs = []
+        self.outputs = []
 
     def forward(self, x):
+        self.inputs = x
         if self.subtract_max:
             max_x = x.max(dim=self.dim, keepdim=True).values
             x = x - max_x
@@ -126,7 +129,7 @@ class Strongermax(nn.Module):
 
         if self.sum_to_1:
             result = result / result.sum(dim=self.dim, keepdim=True)
-
+        self.outputs = result / self.divisor
         return result / self.divisor
 
 # Using polynomial instead of exponential for Softmax separation non-linearity
@@ -141,13 +144,15 @@ class Polymax(nn.Module):
 
         self.power = config.polymax_power
         self.divisor = config.polymax_divisor
+        self.inputs = []
+        self.outputs = []
 
     def forward(self, x):
         # Overview:
         # Flat section:       -inf < x < x_intercept
         # Linear section:     x_intercept <= x <= 0
         # Polynomial section: 0 < x < inf
-
+        self.inputs = x
         # Flat section
         flat_piece = torch.where(x < self.x_intercept, torch.tensor(0.0, device=x.device), torch.tensor(0.0, device=x.device))
 
@@ -160,6 +165,7 @@ class Polymax(nn.Module):
         poly_piece = torch.where(x > 0, x**self.power + self.y_intercept, torch.tensor(0.0, device=x.device))
 
         # Combine sections
+        self.outputs = (poly_piece + linear_piece + flat_piece)/self.divisor
         return (poly_piece + linear_piece + flat_piece)/self.divisor
 
 # Merging of ConSmax body for gradient prop and Polymax head for numerical stability
