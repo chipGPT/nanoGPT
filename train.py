@@ -239,8 +239,8 @@ def parse_args():
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
     logging_group.add_argument('--statistic', choices=[
-        'input_mean', 'input_median', 'input_stdev', 'input_max',
-        'output_mean', 'output_median', 'output_stdev', 'output_max'
+        'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
+        'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min'
     ], default='input_mean', help='Select the statistic and type to display, example: input_mean, output_max')
 
 
@@ -253,10 +253,12 @@ def initialize_statistics(num_layers, num_heads):
             'median': [],
             'stdev': [],
             'max': [],
+            'min': [],
             'o_mean': [],
             'o_median': [],
             'o_stdev': [],
-            'o_max': []
+            'o_max': [],
+            'o_min': []
         }
     
         for _ in range(num_layers):
@@ -264,10 +266,12 @@ def initialize_statistics(num_layers, num_heads):
             stats['median'].append([[] for _ in range(num_heads)])
             stats['stdev'].append([[] for _ in range(num_heads)])
             stats['max'].append([[] for _ in range(num_heads)])
+            stats['min'].append([[] for _ in range(num_heads)])
             stats['o_mean'].append([[] for _ in range(num_heads)])
             stats['o_median'].append([[] for _ in range(num_heads)])
             stats['o_stdev'].append([[] for _ in range(num_heads)])
             stats['o_max'].append([[] for _ in range(num_heads)])
+            stats['o_min'].append([[] for _ in range(num_heads)])
         
         return stats
 
@@ -538,13 +542,14 @@ class Trainer:
             })
     
     def plot_statistics(self):
+        timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
         parts = self.args.statistic.split('_')
         data_type = parts[0]  # 'input' or 'output'
         stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max'
 
         # to decide whether to use the input or output statistics
         stat_prefix = 'o_' if data_type == 'output' else ''
-        directory_path = 'out/images'
+        directory_path = os.path.join(self.args.out_dir, 'images')
         os.makedirs(directory_path, exist_ok=True)
 
         # draw the plot
@@ -564,10 +569,11 @@ class Trainer:
         fig.update_layout(
             title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
             xaxis_title='Training Iteration',
-            yaxis_title=f'{stat_type.title()} of {data_type.capitalize()} Softmax Inputs',
+            yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
             legend_title='Head/Layer'
         )
-        fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plot.html')
+        fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
+        fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
 
         # add titles and lengend to Matplotlib
         plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
@@ -575,7 +581,7 @@ class Trainer:
         plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
         plt.legend(title='Head/Layer')
         plt.grid(True)
-        plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot.png')
+        plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
         plt.close()
 
 
@@ -680,12 +686,14 @@ class Trainer:
                 i_medians = []
                 i_stdevs = []
                 i_max_values = []
+                i_min_values = []
                 denominator = []
                 o_sum_vals = []
                 o_means = []
                 o_medians = []
                 o_stdevs = []
                 o_max_values = []
+                o_min_values = []
 
                 for layer in range (self.args.n_layer):
                     # Inputs
@@ -717,7 +725,7 @@ class Trainer:
 
                         # Max, temporarily replacing NaNs with -inf for calculation
                         i_max_values.append(torch.max(torch.where(torch.isnan(i_head), torch.tensor(float('-inf')), i_head)).item())
-
+                        i_min_values.append(torch.min(torch.where(torch.isnan(i_head), torch.tensor(float('inf')), i_head)).item())
                         # Denominator computation for i_head
                         exp_flattened = torch.exp(i_head[mask])
                         sum = torch.sum(exp_flattened)
@@ -728,6 +736,7 @@ class Trainer:
                         self.stats['median'][layer][i].append(torch.nanmedian(flattened).item())
                         self.stats['stdev'][layer][i].append(torch.std(i_head[mask]).item())
                         self.stats['max'][layer][i].append(torch.max(torch.where(torch.isnan(i_head), torch.tensor(float('-inf')), i_head)).item())
+                        self.stats['min'][layer][i].append(torch.min(torch.where(torch.isnan(i_head), torch.tensor(float('inf')), i_head)).item())
 
 
 
@@ -751,12 +760,14 @@ class Trainer:
                         o_sum_vals.append(torch.sum(o_head[mask]).item())
                         # Max, temporarily replacing NaNs with -inf for calculation
                         o_max_values.append(torch.max(torch.where(torch.isnan(o_head), torch.tensor(float('-inf')), o_head)).item())
+                        o_min_values.append(torch.min(torch.where(torch.isnan(o_head), torch.tensor(float('inf')), o_head)).item())
 
                         # Append statistic to the output list of each head in each layer
                         self.stats['o_mean'][layer][i].append(torch.nanmean(flattened).item())
                         self.stats['o_median'][layer][i].append(torch.nanmedian(flattened).item())
                         self.stats['o_stdev'][layer][i].append(torch.std(o_head[mask]).item())
                         self.stats['o_max'][layer][i].append(torch.max(torch.where(torch.isnan(o_head), torch.tensor(float('-inf')), o_head)).item())
+                        self.stats['o_min'][layer][i].append(torch.min(torch.where(torch.isnan(o_head), torch.tensor(float('inf')), o_head)).item())
 
                     #BETA GAMMA
                     if self.args.softmax_variant_attn == 'consmax':
@@ -780,6 +791,7 @@ class Trainer:
                                   *i_medians,
                                   *i_stdevs,
                                   *i_max_values,
+                                    *i_min_values,
                                   *denominator,
                                   prefix="inputs")
                 self.write_to_csv(self.iter_num,
@@ -788,6 +800,7 @@ class Trainer:
                                   *o_medians,
                                   *o_stdevs,
                                   *o_max_values,
+                                  *o_min_values,
                                   prefix="outputs")
                 if self.args.softmax_variant_attn == 'consmax':
                     self.write_to_csv(self.iter_num, *betas, *gammas, prefix="beta_gamma")
