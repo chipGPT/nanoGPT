@@ -239,9 +239,9 @@ def parse_args():
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
     logging_group.add_argument('--statistic', choices=[
-        'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
-        'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min'
-    ], default='input_mean', help='Select the statistic and type to display, example: input_mean, output_max')
+    'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
+    'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
+], default='input_mean', help='Select one or more statistics to display, e.g., --statistic input_mean output_max')
 
 
     args = parser.parse_args()
@@ -542,47 +542,58 @@ class Trainer:
             })
     
     def plot_statistics(self):
-        timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
-        parts = self.args.statistic.split('_')
-        data_type = parts[0]  # 'input' or 'output'
-        stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max'
+            statistics_to_plot = []
+            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
+            directory_path = os.path.join(self.args.out_dir, 'images')
+            os.makedirs(directory_path, exist_ok=True)
+            statistics_to_plot = [self.args.statistic]
+            if self.args.statistic  == "all_stats":
+                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
+                                  'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
+            elif self.args.statistic == 'input_all':
+                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min']
+            elif self.args.statistic == 'output_all':
+                statistics_to_plot = ['output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
+            for stat in statistics_to_plot:
+                parts = stat.split('_')
+                data_type = parts[0]  # 'input' or 'output'
+                stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max', 'min'
 
-        # to decide whether to use the input or output statistics
-        stat_prefix = 'o_' if data_type == 'output' else ''
-        directory_path = os.path.join(self.args.out_dir, 'images')
-        os.makedirs(directory_path, exist_ok=True)
+                # to decide whether to use the input or output statistics
+                stat_prefix = 'o_' if data_type == 'output' else ''
 
-        # draw the plot
-        fig = go.Figure()
-        plt.figure(figsize=(10, 6))
-        for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
-            for head_idx, data in enumerate(stats_per_layer):
-                fig.add_trace(go.Scatter(
-                    x=list(range(len(data))),
-                    y=data,
-                    mode='lines',
-                    name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
-                ))
-                plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
+                # draw the plot
+                fig = go.Figure()
+                plt.figure(figsize=(10, 6))
+                for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                    for head_idx, data in enumerate(stats_per_layer):
+                        fig.add_trace(go.Scatter(
+                            x=list(range(len(data))),
+                            y=data,
+                            mode='lines',
+                            name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
+                        ))
+                        plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
 
-        # add titles and legend to Plotly
-        fig.update_layout(
-            title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
-            xaxis_title='Training Iteration',
-            yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
-            legend_title='Head/Layer'
-        )
-        fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
-        fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
+                # add titles and legend to Plotly
+                fig.update_layout(
+                    title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
+                    xaxis_title='Training Iteration',
+                    yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
+                    legend_title='Head/Layer'
+                )
+                fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
+                fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
 
-        # add titles and lengend to Matplotlib
-        plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
-        plt.xlabel('Training Iteration')
-        plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
-        plt.legend(title='Head/Layer')
-        plt.grid(True)
-        plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
-        plt.close()
+                # add titles and lengend to Matplotlib
+                plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
+                plt.xlabel('Training Iteration')
+                plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
+                plt.legend(title='Head/Layer')
+                plt.grid(True)
+                plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
+                plt.close()
+
 
 
     def train(self):
