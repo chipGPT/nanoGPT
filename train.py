@@ -241,7 +241,7 @@ def parse_args():
     logging_group.add_argument('--statistic', choices=[
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
     'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
-], default='input_mean', help='Select one or more statistics to display, e.g., --statistic input_mean output_max')
+], default='input_mean', help='Select one or all statistics to display, e.g., --statistic input_min, or --statistic all_stats')
 
 
     args = parser.parse_args()
