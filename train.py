@@ -242,6 +242,10 @@ def parse_args():
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
     'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
 ], default='input_mean', help='Select one or all statistics to display, e.g., --statistic input_min, or --statistic all_stats')
+    logging_group.add_argument('--graph_type', choices=[
+    "heatmap", "plot", "all"
+], default='no_graph', help='Select one of the graph types to display, e.g., --graph_type heatmap, or --graph_type plot')
+    
 
 
     args = parser.parse_args()
@@ -249,7 +253,7 @@ def parse_args():
 
 def initialize_statistics(num_layers, num_heads):
         stats = {
-            'mean': [],
+            'mean': [], #3-D data first D is layer, second D is head, third D is #iter
             'median': [],
             'stdev': [],
             'max': [],
@@ -563,36 +567,80 @@ class Trainer:
                 stat_prefix = 'o_' if data_type == 'output' else ''
 
                 # draw the plot
-                fig = go.Figure()
-                plt.figure(figsize=(10, 6))
-                for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
-                    for head_idx, data in enumerate(stats_per_layer):
-                        fig.add_trace(go.Scatter(
-                            x=list(range(len(data))),
-                            y=data,
-                            mode='lines',
-                            name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
-                        ))
-                        plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
+                if self.args.graph_type == 'plot' or self.args.graph_type == 'all':
+                    fig = go.Figure()
+                    plt.figure(figsize=(10, 6))
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            fig.add_trace(go.Scatter(
+                                x=list(range(len(data))),
+                                y=data,
+                                mode='lines',
+                                name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
+                            ))
+                            plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
 
-                # add titles and legend to Plotly
-                fig.update_layout(
-                    title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
-                    xaxis_title='Training Iteration',
-                    yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
-                    legend_title='Head/Layer'
-                )
-                fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
-                fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
+                    # add titles and legend to Plotly
+                    fig.update_layout(
+                        title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
+                        xaxis_title='Training Iteration',
+                        yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
+                        legend_title='Head/Layer'
+                    )
+                    fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
+                    fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
 
-                # add titles and lengend to Matplotlib
-                plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
-                plt.xlabel('Training Iteration')
-                plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
-                plt.legend(title='Head/Layer')
-                plt.grid(True)
-                plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
-                plt.close()
+                    # add titles and lengend to Matplotlib
+                    plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
+                    plt.xlabel('Training Iteration')
+                    plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
+                    plt.legend(title='Head/Layer')
+                    plt.grid(True)
+                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
+                    plt.close()
+
+                if self.args.graph_type == 'heatmap' or self.args.graph_type == 'all':
+                    # create a heatmap
+                    plt.figure(figsize=(10, 6))
+
+                    # create ylabels
+                    y_labels = []
+                    # Reduce first two dimensions to 1D
+                    # combing layer_idx and head_idx
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            y_labels.append(f"Layer {layer_idx} Head {head_idx}")
+                    #data is the value of #iter
+                    # create xlabels
+                    num_iters = len(data)
+                    unit_size = num_iters // 10
+                    x_labels = [i*unit_size for i in range(10)]
+
+                    # create plot_data
+                    plot_data = []
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            plot_data.append([])
+                            for i in x_labels:
+                                plot_data[-1].append(data[i])
+                    plot_data = np.array(plot_data)
+                    
+                    ######
+                    fig, ax = plt.subplots()
+                    im = ax.imshow(plot_data)
+                    # Name the x and y axis
+                    ax.set_xticks(np.arange(len(x_labels)), labels=x_labels)
+                    ax.set_yticks(np.arange(len(y_labels)), labels=y_labels)
+                    ax.set_xlabel("Number of Iterations", fontweight="bold")
+                    
+                    # Create a colorbar
+                    cbar = ax.figure.colorbar(im, ax=ax)
+                    cbar.ax.set_ylabel(stat_type, rotation=-90, va="bottom")
+
+                    ax.set_title(f"Heatmap of {data_type} {stat_type}")
+                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_heatmap_{timestamp}.png')
+                    plt.close()
+
 
 
 
