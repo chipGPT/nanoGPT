@@ -18,7 +18,7 @@
     "use_post_ln": [true, false],
     "strongermax_use_xmax" : [true, false],
     "strongermax_sum_to_1": [true, false],
-    "statistics": ["all_stats"],
+    "statistic": ["all_stats"],
     "graph_type":["all"]
   }
 ]
