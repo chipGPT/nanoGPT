@@ -631,6 +631,7 @@ class Trainer:
                     # Name the x and y axis
                     ax.set_xticks(np.arange(len(x_labels)), labels=x_labels)
                     ax.set_yticks(np.arange(len(y_labels)), labels=y_labels)
+                    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
                     ax.set_xlabel("Number of Iterations", fontweight="bold")
                     
                     # Create a colorbar
