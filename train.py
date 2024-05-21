@@ -54,13 +54,16 @@ def parse_args():
     model_group.add_argument('--block_size', default=256, type=int)
     model_group.add_argument('--n_layer', default=6, type=int)
     model_group.add_argument('--n_head', default=6, type=int)
-    model_group.add_argument('--n_kv_group', default=2, type=int)
+    model_group.add_argument('--n_kv_group', default=6, type=int)
     model_group.add_argument('--n_embd', default=384, type=int)
     model_group.add_argument('--dropout', default=0.2, type=float)
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
-    model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
     model_group.add_argument('--gate', default=False, action=argparse.BooleanOptionalAction, help="option for gated attention see https://arxiv.org/abs/2306.12929")
+
+    ## MLP Options
+    model_group.add_argument('--use_swiglu', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
 
     # Shared Parameter Settings
     model_group.add_argument('--shared_mlp_size', default=1, type=int, help="every 'k' contiguous blocks of mlp are shared")
@@ -129,7 +132,7 @@ def parse_args():
                                                          "consmax",
                                                          "consmax_quan",
                                                          "polymax",
-                                                         "polymax_quan",
+                                                         "vpolymax",
                                                          "exppolymax",
                                                          "strongermax",
                                                          "softermax",
@@ -145,7 +148,7 @@ def parse_args():
                                                          "consmax",
                                                          "consmax_quan",
                                                          "polymax",
-                                                         "polymax_quan",
+                                                         "vpolymax",
                                                          "exppolymax",
                                                          "strongermax",
                                                          "softermax",
@@ -193,6 +196,14 @@ def parse_args():
 
     ### Softermax Specific Options
     model_group.add_argument('--softermax_use_xmax', default=True, action=argparse.BooleanOptionalAction)
+
+    ### SoftPlus Options
+    model_group.add_argument('--softplus_divisor', type=float,default=100.0)
+    ### SquarePlus Options
+    model_group.add_argument('--squareplus_divisor', type=float,default=100.0)
+
+    ### Sequence Length Division https://arxiv.org/abs/2309.
+    model_group.add_argument('--div_by_seq_len', default=False, action=argparse.BooleanOptionalAction)
 
     # Optimizer args
     training_group.add_argument('--max_iters', default=3500, type=int)
