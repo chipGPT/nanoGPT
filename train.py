@@ -606,7 +606,7 @@ class Trainer:
                 # draw the plot
                 if self.args.graph_type == 'plot' or self.args.graph_type == 'all':
                     fig = go.Figure()
-                    plt.figure(figsize=(10, 6))
+                    plt.figure(figsize=(18, 8))
                     for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
                         for head_idx, data in enumerate(stats_per_layer):
                             fig.add_trace(go.Scatter(
@@ -622,7 +622,9 @@ class Trainer:
                         title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
                         xaxis_title='Training Iteration',
                         yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
-                        legend_title='Head/Layer'
+                        legend_title='Head/Layer',
+                        height=890,
+                        width=1200
                     )
                     fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
                     fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
@@ -631,15 +633,13 @@ class Trainer:
                     plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
                     plt.xlabel('Training Iteration')
                     plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
-                    plt.legend(title='Head/Layer')
+                    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Head/Layer')
+                    # plt.legend(title='Head/Layer')
                     plt.grid(True)
                     plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
                     plt.close()
 
                 if self.args.graph_type == 'heatmap' or self.args.graph_type == 'all':
-                    # create a heatmap
-                    plt.figure(figsize=(10, 6))
-
                     #data is the value of #iter
                     # create xlabels
                     num_iters = len(data)
@@ -656,7 +656,7 @@ class Trainer:
                     plot_data = np.array(plot_data)
                     
                     ######
-                    fig, ax = plt.subplots()
+                    fig, ax = plt.subplots(figsize=(8,10))
                     im = ax.imshow(plot_data)
                     # Name the x and y axis
                     ax.set_xticks(np.arange(len(x_labels)), labels=x_labels)
