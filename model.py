@@ -159,58 +159,69 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
 
-    def forward(self, x):
+    def forward(self, x, stored_k=None, stored_v=None, block_count=0, kv_cache_table=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         q = self.c_attn_q(x)
-        k = self.c_attn_k(x)
-        v = self.c_attn_v(x)
+        if stored_k is not None and stored_v is not None and block_count % 4 != 0:
+            print("using stored k and v")
+            print("block count: ", block_count)
+            k = stored_k
+            v = stored_v
+        else:
+            print("not using stored k and v")
+            #x shape [5, 3, 128]
+            print("block count: ", block_count)
+            print("x shape: ", x.shape)
+            print(x)
+            #
+            k = self.c_attn_k(x)
+            v = self.c_attn_v(x)
 
-        if self.rotary_emb_q is not None:
-            q = self.rotary_emb_q(q)
-            k = self.rotary_emb_k(k)
+            if self.rotary_emb_q is not None:
+                q = self.rotary_emb_q(q)
+                k = self.rotary_emb_k(k)
 
-        if self.window_size is not None:
-            window_mask = torch.ones((1, 1, T, T), device=x.device)
-            window_mask = torch.triu(window_mask, diagonal=-self.window_size)
-            window_mask = self.bias[:,:,:T,:T] * window_mask
+            if self.window_size is not None:
+                window_mask = torch.ones((1, 1, T, T), device=x.device)
+                window_mask = torch.triu(window_mask, diagonal=-self.window_size)
+                window_mask = self.bias[:,:,:T,:T] * window_mask
 
-        if self.gate:
-            if self.n_kv_group == self.n_head:
-                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                gate_ = torch.sigmoid(Gating(x))
-                q = q * gate_
-                k = k * gate_
-                v = v * gate_
-            else:
-                # TODO: Test more methods to merge Attention Gates with GQA
-                # TODO: Evaluate each method's ability to even out parameter sizes
-                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                gate_qx = Gating_q(x)
-                gate_q = torch.sigmoid(gate_qx)
-                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                q = q * gate_q
-                k = k * gate_kv
-                v = v * gate_kv
-
+            if self.gate:
+                if self.n_kv_group == self.n_head:
+                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    gate_ = torch.sigmoid(Gating(x))
+                    q = q * gate_
+                    k = k * gate_
+                    v = v * gate_
+                else:
+                    # TODO: Test more methods to merge Attention Gates with GQA
+                    # TODO: Evaluate each method's ability to even out parameter sizes
+                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                    gate_qx = Gating_q(x)
+                    gate_q = torch.sigmoid(gate_qx)
+                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
+                    q = q * gate_q
+                    k = k * gate_kv
+                    v = v * gate_kv
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
-        k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-        v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        k_ = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        v_ = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
 
         y = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k_, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
             att = None
             # manual implementation of attention
             if self.n_head != self.n_kv_group:
-              k_repeated = k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+              k_repeated = k_.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
               att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
             else:
-              att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+              att = (q @ k_.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
 
 
             # apply masks
@@ -233,16 +244,18 @@ class CausalSelfAttention(nn.Module):
                 att = F.softmax(att, dim=-1)
 
             att = self.attn_dropout(att)
-            if self.n_head != self.n_kv_group:
-                v_repeated = v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-                y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-            else:
-                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            #if self.n_head != self.n_kv_group:
+            v_repeated = v_.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+            y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            #else:
+                #y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        print("k shape: ", k.shape)
+        print(k[0][0][0])
+        return y, k, v
 
 
 class MLP(nn.Module):
@@ -293,21 +306,27 @@ class Block(nn.Module):
         else:
             self.mlp = mlp
 
-    def forward(self, x):
+    def forward(self, x, stored_k=None, stored_v=None, block_count=0):
+
+        
         if self.use_post_ln:
             if self.use_parallel_mlp:
-                x = self.ln_1(x + self.attn(x) + self.mlp(x))
+                attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                x = self.ln_1(x + attn_output + self.mlp(x))
             else:
-                x = self.ln_1(x + self.attn(x))
+                attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                x = self.ln_1(x + attn_output)
                 x = self.ln_2(x + self.mlp(x))
         else:
             if self.use_parallel_mlp:
                 ln_1 = self.ln_1(x)
-                x = x + self.attn(ln_1) + self.mlp(ln_1)
+                attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                x = x +attn_output + self.mlp(ln_1)
             else:
-                x = x + self.attn(self.ln_1(x))
+                attn_output, new_k, new_v = self.attn(self.ln_1(x), stored_k, stored_v, block_count)
+                x = x + attn_output
                 x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, new_k, new_v
 
 
 class GPT(nn.Module):
@@ -391,8 +410,14 @@ class GPT(nn.Module):
           x = self.transformer.drop(tok_emb + pos_emb)
         else:
           x = self.transformer.drop(tok_emb)
+        k_cache = None
+        v_cache = None
+        block_count = 0
         for block in self.transformer.h:
-            x = block(x)
+            x, k, v = block(x, stored_k = k_cache, stored_v = v_cache, block_count = block_count)
+            k_cache = k
+            v_cache = v
+            block_count += 1
         x = self.transformer.ln_f(x)
 
         if targets is not None:

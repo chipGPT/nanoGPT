@@ -642,6 +642,8 @@ class Trainer:
                     plt.savefig(f'{directory_path}/{data_type}_{stat_type}_heatmap_{timestamp}.png')
                     plt.close()
 
+                    #Create boxplot
+
 
 
 
@@ -764,6 +766,8 @@ class Trainer:
 
                     ## Get first batch
                     i_first_batch = softmax_input[0]
+                    print(i_first_batch.shape)
+                    print(i_first_batch)
                     i_first_batch[i_first_batch == float('-inf')] = float('NaN')
 
 
@@ -772,6 +776,7 @@ class Trainer:
 
                         ## Flatten across heads, height, and width
                         flattened = i_head.view(-1)
+                        print("flattened", flattened)
 
                         
                         ## Calculate statistics
