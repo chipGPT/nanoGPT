@@ -164,16 +164,16 @@ class CausalSelfAttention(nn.Module):
 
         q = self.c_attn_q(x)
         if stored_k is not None and stored_v is not None and block_count % 4 != 0:
-            print("using stored k and v")
-            print("block count: ", block_count)
+            # print("using stored k and v")
+            # print("block count: ", block_count)
             k = stored_k
             v = stored_v
         else:
-            print("not using stored k and v")
+            # print("not using stored k and v")
             #x shape [5, 3, 128]
-            print("block count: ", block_count)
-            print("x shape: ", x.shape)
-            print(x)
+            # print("block count: ", block_count)
+            # print("x shape: ", x.shape)
+            # print(x)
             #
             k = self.c_attn_k(x)
             v = self.c_attn_v(x)
@@ -206,22 +206,22 @@ class CausalSelfAttention(nn.Module):
                     k = k * gate_kv
                     v = v * gate_kv
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
-        k_ = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-        v_ = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        reshaped_k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        reshaped_v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
 
         y = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k_, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, reshaped_k, reshaped_v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
             att = None
             # manual implementation of attention
             if self.n_head != self.n_kv_group:
-              k_repeated = k_.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-              att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
+              k_repeated = reshaped_k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+              att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(reshaped_k.size(-1))
             else:
-              att = (q @ k_.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+              att = (q @ reshaped_k.transpose(-2, -1)) * (1.0 / math.sqrt(reshaped_k.size(-1)))
 
 
             # apply masks
@@ -244,17 +244,17 @@ class CausalSelfAttention(nn.Module):
                 att = F.softmax(att, dim=-1)
 
             att = self.attn_dropout(att)
-            #if self.n_head != self.n_kv_group:
-            v_repeated = v_.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-            y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-            #else:
-                #y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            if self.n_head != self.n_kv_group:
+                v_repeated = reshaped_v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+                y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            else:
+                y = att @ reshaped_v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        print("k shape: ", k.shape)
-        print(k[0][0][0])
+        # print("k shape: ", k.shape)
+        # print(k[0][0][0])
         return y, k, v
 
 
