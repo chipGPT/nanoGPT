@@ -10,6 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 import sys
+import re
 
 import torch
 import torch.nn as nn
@@ -19,7 +20,7 @@ from torch.nn import functional as F
 from gpt_conf import GPTConfig
 
 # Variations
-from variations.softmax_variations import softmax_dictionary, Softermax, ConSmax, ConSmaxQuan, SaturatingConSmax, Strongermax, Polymax, PolymaxQuan, SigSoftmax, ExpPolymax, Softplus, Squareplus
+from variations.softmax_variations import softmax_dictionary, Softermax, ConSmax, ConSmaxQuan, SaturatingConSmax, Strongermax, Polymax, SigSoftmax, ExpPolymax, Softplus, Squareplus
 from variations.norm_variations import norm_dictionary, LayerNorm, RMSNorm, pRMSNorm, kRMSNorm
 from variations.position_encoding_variations import RotaryEmbedding, ShortRope, SymmetricalOverlapAngularPositions, FIRE
 from variations.activation_variations import SquaredReLU, activation_dictionary
@@ -260,24 +261,40 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-
     def __init__(self, config):
         super().__init__()
 
         # Select linear variant
         self.linear_variant = linear_dictionary[config.linear_variant]
-        self.c_fc = self.linear_variant(config.n_embd, 4 * config.n_embd, bias=config.bias)
 
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant]
 
-        self.c_proj = self.linear_variant(4 * config.n_embd, config.n_embd, bias=config.bias)
+        # Whether to ues swiglu
+        self.use_swiglu = config.use_swiglu
+
+        if self.use_swiglu:
+            self.c_fc_in1 = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, bias=config.bias)
+            self.c_fc_in2 = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, bias=config.bias)
+            self.c_fc_out = linear_dictionary[config.linear_variant](4 * config.n_embd, config.n_embd, bias=config.bias)
+        else:
+            self.c_fc = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, bias=config.bias)
+            self.c_proj = linear_dictionary[config.linear_variant](4 * config.n_embd, config.n_embd, bias=config.bias)
+
+        self.activation_variant = activation_dictionary[config.activation_variant]
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.activation_variant(x)
-        x = self.c_proj(x)
+        if self.use_swiglu:
+            x_in1 = self.c_fc_in1(x)
+            x_in1 = self.activation_variant(x_in1)
+            x_in2 = self.c_fc_in2(x)
+            x_out = x_in1 * x_in2
+            x = self.c_fc_out(x_out)
+        else:
+            x = self.c_fc(x)
+            x = self.activation_variant(x)
+            x = self.c_proj(x)
         x = self.dropout(x)
         return x
 
@@ -574,3 +591,31 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+    @torch.no_grad()
+    def generate_with_stop(self, idx, max_new_tokens, stop_string, decode, temperature=1.0, top_k=None):
+        """
+        Generate tokens and stop on fixed string match, return the state for further input.
+        """
+        generated_text = ""
+        buffer = ""
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+
+            next_token_text = decode(idx_next[0].tolist())
+            generated_text += next_token_text
+            buffer += next_token_text
+
+            # Check if the buffer ends with the stop_string
+            if buffer.endswith(stop_string):
+                break
+
+        return idx, generated_text

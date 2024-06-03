@@ -6,7 +6,16 @@ cd ../
 dataset="shakespeare_char"
 python3 "data/${dataset}/prepare.py"
 
-softmax_variation=("softmax" "consmax" "consmax_quan" "polymax" "softermax" "sigsoftmax" "exppolymax" "saturatingconsmax" "strongermax")
+softmax_variation=( \
+  "softmax" \
+  "consmax" \
+  "consmax_quan" \
+  "polymax" \
+  "softermax" \
+  "sigsoftmax" \
+  "exppolymax" \
+  "saturatingconsmax" \
+  "strongermax")
 
 n_layer="2"
 n_head="2"
@@ -32,6 +41,7 @@ do
     --max_iters "$max_iters" \
     --n_layer "$n_layer" \
     --n_head "$n_head" \
+    --n_kv_group "$n_kv_group" \
     --n_embd "$n_embd" \
     --eval_iters "$eval_iters" \
     --eval_interval "$eval_interval" \

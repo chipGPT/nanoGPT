@@ -54,13 +54,16 @@ def parse_args():
     model_group.add_argument('--block_size', default=256, type=int)
     model_group.add_argument('--n_layer', default=6, type=int)
     model_group.add_argument('--n_head', default=6, type=int)
-    model_group.add_argument('--n_kv_group', default=2, type=int)
+    model_group.add_argument('--n_kv_group', default=6, type=int)
     model_group.add_argument('--n_embd', default=384, type=int)
     model_group.add_argument('--dropout', default=0.2, type=float)
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
-    model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
     model_group.add_argument('--gate', default=False, action=argparse.BooleanOptionalAction, help="option for gated attention see https://arxiv.org/abs/2306.12929")
+
+    ## MLP Options
+    model_group.add_argument('--use_swiglu', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
 
     # Shared Parameter Settings
     model_group.add_argument('--shared_mlp_size', default=1, type=int, help="every 'k' contiguous blocks of mlp are shared")
@@ -129,7 +132,7 @@ def parse_args():
                                                          "consmax",
                                                          "consmax_quan",
                                                          "polymax",
-                                                         "polymax_quan",
+                                                         "vpolymax",
                                                          "exppolymax",
                                                          "strongermax",
                                                          "softermax",
@@ -145,7 +148,7 @@ def parse_args():
                                                          "consmax",
                                                          "consmax_quan",
                                                          "polymax",
-                                                         "polymax_quan",
+                                                         "vpolymax",
                                                          "exppolymax",
                                                          "strongermax",
                                                          "softermax",
@@ -194,6 +197,14 @@ def parse_args():
     ### Softermax Specific Options
     model_group.add_argument('--softermax_use_xmax', default=True, action=argparse.BooleanOptionalAction)
 
+    ### SoftPlus Options
+    model_group.add_argument('--softplus_divisor', type=float,default=100.0)
+    ### SquarePlus Options
+    model_group.add_argument('--squareplus_divisor', type=float,default=100.0)
+
+    ### Sequence Length Division https://arxiv.org/abs/2309.
+    model_group.add_argument('--div_by_seq_len', default=False, action=argparse.BooleanOptionalAction)
+
     # Optimizer args
     training_group.add_argument('--max_iters', default=3500, type=int)
     training_group.add_argument('--weight_decay', default=1e-1, type=float)
@@ -238,6 +249,7 @@ def parse_args():
     logging_group.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
+<<<<<<< HEAD
     logging_group.add_argument('--statistic', choices=[
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
     'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
@@ -246,7 +258,20 @@ def parse_args():
     "heatmap", "plot", "all"
 ], default='no_graph', help='Select one of the graph types to display, e.g., --graph_type heatmap, or --graph_type plot')
     
+=======
+>>>>>>> upstream/master
 
+    # Visualization args
+    logging_group.add_argument('--statistic', choices=[
+    'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
+    'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
+     ], default='input_mean', help='Select one or all statistics to display, e.g., --statistic input_min, or --statistic all_stats')
+    logging_group.add_argument('--graph_type', choices=[
+    "heatmap", "plot", "boxplot", "all"
+     ], default='no_graph', help='Select one of the graph types to display, e.g., --graph_type heatmap, or --graph_type plot')
+    logging_group.add_argument('--box_plot_interval', default=1000, type=int, help='Instead of using mean/median/stdev statistics, create box plot of all input/output values at certain intervals of iteration')
+    logging_group.add_argument('--box_plot_statistic', choices=['input', 'output', 'all'],
+     default='', help='Select input or output statistic to display in boxplot')
 
     args = parser.parse_args()
     return args, model_group, training_group, logging_group
@@ -306,7 +331,7 @@ class Trainer:
             torch.cuda.set_device(self.device)
             self.master_process = self.ddp_rank == 0
             self.seed_offset = self.ddp_rank
-            self.gradient_accumulation_steps //= self.ddp_world_size
+            self.args.gradient_accumulation_steps //= self.ddp_world_size
         else:
             self.device = self.args.device
             self.master_process = True
@@ -544,6 +569,7 @@ class Trainer:
                 "train/loss": loss_training,
                 "mfu": running_mfu*100,
             })
+<<<<<<< HEAD
     
     def plot_statistics(self):
             statistics_to_plot = []
@@ -645,7 +671,130 @@ class Trainer:
                     #Create boxplot
 
 
+=======
 
+    def create_box_plot(self, plot_data, y_labels, timestamp, data_type, stat_type):
+        directory_path = os.path.join(self.args.out_dir, 'images')
+        os.makedirs(directory_path, exist_ok=True)
+
+        # create a boxplot
+        fig = plt.figure(figsize =(10, 7))
+        ax = fig.add_subplot(111)
+
+        # Creating axes instance
+        ax.boxplot(plot_data, sym = '', patch_artist = True, vert = 0)
+
+        # y-axis labels
+        ax.set_yticklabels(y_labels)
+
+        # Removing top axes and right axes
+        # ticks
+        ax.get_xaxis().tick_bottom()
+        ax.get_yaxis().tick_left()
+            
+        ax.set_title(f"Boxplot of {data_type} {stat_type}")
+        plt.savefig(f'{directory_path}/{data_type}_{stat_type}_boxplot_{timestamp}.png')
+        plt.close()
+    
+    def plot_statistics(self, graph_y_labels):
+            statistics_to_plot = []
+            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
+            directory_path = os.path.join(self.args.out_dir, 'images')
+            os.makedirs(directory_path, exist_ok=True)
+            statistics_to_plot = [self.args.statistic]
+            if self.args.statistic  == "all_stats":
+                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
+                                  'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
+            elif self.args.statistic == 'input_all':
+                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min']
+            elif self.args.statistic == 'output_all':
+                statistics_to_plot = ['output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
+            for stat in statistics_to_plot:
+                parts = stat.split('_')
+                data_type = parts[0]  # 'input' or 'output'
+                stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max', 'min'
+>>>>>>> upstream/master
+
+                # to decide whether to use the input or output statistics
+                stat_prefix = 'o_' if data_type == 'output' else ''
+
+                # draw the plot
+                if self.args.graph_type == 'plot' or self.args.graph_type == 'all':
+                    fig = go.Figure()
+                    plt.figure(figsize=(18, 8))
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            fig.add_trace(go.Scatter(
+                                x=list(range(len(data))),
+                                y=data,
+                                mode='lines',
+                                name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
+                            ))
+                            plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
+
+                    # add titles and legend to Plotly
+                    fig.update_layout(
+                        title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
+                        xaxis_title='Training Iteration',
+                        yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
+                        legend_title='Head/Layer',
+                        height=890,
+                        width=1200
+                    )
+                    fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
+                    fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
+
+                    # add titles and lengend to Matplotlib
+                    plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
+                    plt.xlabel('Training Iteration')
+                    plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
+                    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Head/Layer')
+                    # plt.legend(title='Head/Layer')
+                    plt.grid(True)
+                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
+                    plt.close()
+
+                if self.args.graph_type == 'heatmap' or self.args.graph_type == 'all':
+                    #data is the value of #iter
+                    # create xlabels
+                    num_iters = len(data)
+                    unit_size = num_iters // 10
+                    x_labels = [i*unit_size for i in range(10)]
+
+                    # create plot_data
+                    plot_data = []
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            plot_data.append([])
+                            for i in x_labels:
+                                plot_data[-1].append(data[i])
+                    plot_data = np.array(plot_data)
+                    
+                    ######
+                    fig, ax = plt.subplots(figsize=(8,10))
+                    im = ax.imshow(plot_data)
+                    # Name the x and y axis
+                    ax.set_xticks(np.arange(len(x_labels)), labels=x_labels)
+                    ax.set_yticks(np.arange(len(graph_y_labels)), labels=graph_y_labels)
+                    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+                    ax.set_xlabel("Number of Iterations", fontweight="bold")
+                    
+                    # Create a colorbar
+                    cbar = ax.figure.colorbar(im, ax=ax)
+                    cbar.ax.set_ylabel(stat_type, rotation=-90, va="bottom")
+
+                    ax.set_title(f"Heatmap of {data_type} {stat_type}")
+                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_heatmap_{timestamp}.png')
+                    plt.close()
+
+                if self.args.graph_type == 'boxplot' or self.args.graph_type == 'all':
+                    # create plot_data
+                    plot_data = []
+                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
+                        for head_idx, data in enumerate(stats_per_layer):
+                            plot_data.append(np.array(data))
+
+                    self.create_box_plot(plot_data, graph_y_labels, timestamp, data_type, stat_type)
 
     def train(self):
         self.X, self.Y = self.get_batch('train')
@@ -653,6 +802,10 @@ class Trainer:
         local_iter_num = 0
         running_mfu = -1.0
         num_steps_with_worse_loss = 0
+        graph_y_labels = []
+        for layer in range(self.args.n_layer):
+            for head in range(self.args.n_head):
+                graph_y_labels.append(f"Layer {layer} Head {head}")
 
         while True:
             lr = self.get_lr(self.iter_num) if self.args.decay_lr else self.args.learning_rate
@@ -684,6 +837,7 @@ class Trainer:
                         torch.save(checkpoint, os.path.join(self.args.out_dir, 'ckpt.pt'))
                 if self.args.patience is not None and num_steps_with_worse_loss >= self.args.patience:
                     print(f"Early Stopping: loss has not decreased in {self.args.patience + 1} steps")
+                    self.plot_statistics(graph_y_labels)
                     break
                 if losses['val'] > self.best_val_loss:
                     num_steps_with_worse_loss += 1
@@ -757,6 +911,9 @@ class Trainer:
                 o_max_values = []
                 o_min_values = []
 
+                box_plot_input_data = []
+                box_plot_output_data = []
+                        
                 for layer in range (self.args.n_layer):
                     # Inputs
                     inputs_location = f"transformer.h[{layer}].attn.softmax_layer_attn.inputs"
@@ -770,14 +927,14 @@ class Trainer:
                     print(i_first_batch)
                     i_first_batch[i_first_batch == float('-inf')] = float('NaN')
 
-
                     for i, i_head in enumerate(i_first_batch):
-                        
-
                         ## Flatten across heads, height, and width
                         flattened = i_head.view(-1)
+<<<<<<< HEAD
                         print("flattened", flattened)
 
+=======
+>>>>>>> upstream/master
                         
                         ## Calculate statistics
                         i_means.append(torch.nanmean(flattened).item())
@@ -787,6 +944,9 @@ class Trainer:
                         mask = ~torch.isnan(i_head)
                         i_stdevs.append(torch.std(i_head[mask]).item())
                         i_sum_vals.append(torch.sum(i_head[mask]).item())
+
+                        if self.iter_num % self.args.box_plot_interval == 0 and (self.args.box_plot_statistic == "all" or self.args.box_plot_statistic == "input"):
+                            box_plot_input_data.append(i_head[mask].detach().numpy())
 
                         # Max, temporarily replacing NaNs with -inf for calculation
                         i_max_values.append(torch.max(torch.where(torch.isnan(i_head), torch.tensor(float('-inf')), i_head)).item())
@@ -823,6 +983,10 @@ class Trainer:
                         mask = ~torch.isnan(o_head)
                         o_stdevs.append(torch.std(o_head[mask]).item())
                         o_sum_vals.append(torch.sum(o_head[mask]).item())
+
+                        if self.iter_num % self.args.box_plot_interval == 0 and (self.args.box_plot_statistic == "all" or self.args.box_plot_statistic == "output"):
+                            box_plot_output_data.append(o_head[mask].detach().numpy())
+
                         # Max, temporarily replacing NaNs with -inf for calculation
                         o_max_values.append(torch.max(torch.where(torch.isnan(o_head), torch.tensor(float('-inf')), o_head)).item())
                         o_min_values.append(torch.min(torch.where(torch.isnan(o_head), torch.tensor(float('inf')), o_head)).item())
@@ -849,6 +1013,16 @@ class Trainer:
 
                         self.log_gamma_beta(gamma, beta, self.iter_num, layer)
 
+                if self.args.box_plot_statistic and (self.iter_num % self.args.box_plot_interval == 0) and self.iter_num != 0:
+                    timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
+                    if self.args.box_plot_statistic == "all":
+                        self.create_box_plot(box_plot_input_data, graph_y_labels, timestamp, "input", self.iter_num)
+                        self.create_box_plot(box_plot_output_data, graph_y_labels, timestamp, "output", self.iter_num)
+                    elif self.args.box_plot_statistic == "input":
+                        self.create_box_plot(box_plot_input_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
+                    else:
+                        self.create_box_plot(box_plot_output_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
+                    
 
                 self.write_to_csv(self.iter_num,
                                   *i_sum_vals,
@@ -898,7 +1072,7 @@ class Trainer:
             local_iter_num += 1
 
             if self.iter_num > self.args.max_iters:
-                self.plot_statistics()
+                self.plot_statistics(graph_y_labels)
                 if self.args.only_save_checkpoint_at_end:
                     checkpoint = {
                         'model': self.raw_model.state_dict(),
