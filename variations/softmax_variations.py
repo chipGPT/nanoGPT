@@ -118,10 +118,9 @@ class Strongermax(nn.Module):
         self.divisor = config.strongermax_divisor
         self.inputs = []
         self.outputs = []
-<<<<<<< HEAD
-=======
+
         self.div_by_seq_len = config.div_by_seq_len
->>>>>>> upstream/master
+
 
     def forward(self, x):
         self.inputs = x
@@ -133,10 +132,7 @@ class Strongermax(nn.Module):
 
         if self.sum_to_1:
             result = result / result.sum(dim=self.dim, keepdim=True)
-<<<<<<< HEAD
-        self.outputs = result / self.divisor
-        return result / self.divisor
-=======
+
 
         if self.div_by_seq_len:
             seq_len = x.shape[self.dim]
@@ -146,7 +142,7 @@ class Strongermax(nn.Module):
         self.outputs = result
 
         return result
->>>>>>> upstream/master
+
 
 # Using polynomial instead of exponential for Softmax separation non-linearity
 class Polymax(nn.Module):
@@ -229,10 +225,7 @@ class VPolymax(nn.Module):
         poly_piece = torch.where(x > 0, x**self.power + self.y_intercept, torch.tensor(0.0, device=x.device))
 
         # Combine sections
-<<<<<<< HEAD
-        self.outputs = (poly_piece + linear_piece + flat_piece)/self.divisor
-        return (poly_piece + linear_piece + flat_piece)/self.divisor
-=======
+
         result = (poly_piece + linear_piece + flat_piece)/self.divisor
 
         # divide by sequence length
@@ -241,7 +234,6 @@ class VPolymax(nn.Module):
             result = result / seq_len
 
         return result
->>>>>>> upstream/master
 
 # Merging of ConSmax body for gradient prop and Polymax head for numerical stability
 class SaturatingConSmax(nn.Module):

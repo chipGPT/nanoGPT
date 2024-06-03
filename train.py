@@ -249,17 +249,6 @@ def parse_args():
     logging_group.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
-<<<<<<< HEAD
-    logging_group.add_argument('--statistic', choices=[
-    'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
-    'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
-], default='input_mean', help='Select one or all statistics to display, e.g., --statistic input_min, or --statistic all_stats')
-    logging_group.add_argument('--graph_type', choices=[
-    "heatmap", "plot", "all"
-], default='no_graph', help='Select one of the graph types to display, e.g., --graph_type heatmap, or --graph_type plot')
-    
-=======
->>>>>>> upstream/master
 
     # Visualization args
     logging_group.add_argument('--statistic', choices=[
@@ -569,7 +558,7 @@ class Trainer:
                 "train/loss": loss_training,
                 "mfu": running_mfu*100,
             })
-<<<<<<< HEAD
+
     
     def plot_statistics(self):
             statistics_to_plot = []
@@ -671,7 +660,7 @@ class Trainer:
                     #Create boxplot
 
 
-=======
+
 
     def create_box_plot(self, plot_data, y_labels, timestamp, data_type, stat_type):
         directory_path = os.path.join(self.args.out_dir, 'images')
@@ -713,7 +702,7 @@ class Trainer:
                 parts = stat.split('_')
                 data_type = parts[0]  # 'input' or 'output'
                 stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max', 'min'
->>>>>>> upstream/master
+
 
                 # to decide whether to use the input or output statistics
                 stat_prefix = 'o_' if data_type == 'output' else ''
@@ -928,9 +917,7 @@ class Trainer:
                     for i, i_head in enumerate(i_first_batch):
                         ## Flatten across heads, height, and width
                         flattened = i_head.view(-1)
-<<<<<<< HEAD
-=======
->>>>>>> upstream/master
+
                         
                         ## Calculate statistics
                         i_means.append(torch.nanmean(flattened).item())

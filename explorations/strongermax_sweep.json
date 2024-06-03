@@ -1,10 +1,6 @@
 [
   {
-<<<<<<< HEAD
     "max_iters": ["8000"],
-=======
-    "max_iters": ["6000"],
->>>>>>> upstream/master
     "n_layer": ["6"],
     "n_kv_group": ["6"],
     "n_head": ["6"],
@@ -23,17 +19,10 @@
     "strongermax_use_xmax" : [true, false],
     "strongermax_sum_to_1": [true, false],
     "statistic": ["all_stats"],
-<<<<<<< HEAD
-    "graph_type":["all"]
-  }
-]
-
-
-=======
     "graph_type":["all"],
     "box_plot_interval": ["1000"],
     "box_plot_statistic": ["all"],
     "patience": ["1000"]
   }
 ]
->>>>>>> upstream/master
+
