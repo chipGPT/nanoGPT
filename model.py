@@ -163,6 +163,7 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         q = self.c_attn_q(x)
+        ########CLA related modification#############
         if stored_k is not None and stored_v is not None and block_count % 4 != 0:
             print("using stored k and v")
             print("block count: ", block_count)
@@ -177,7 +178,7 @@ class CausalSelfAttention(nn.Module):
             #
             k = self.c_attn_k(x)
             v = self.c_attn_v(x)
-
+        ########CLA related modification#############
             if self.rotary_emb_q is not None:
                 q = self.rotary_emb_q(q)
                 k = self.rotary_emb_k(k)
@@ -413,13 +414,14 @@ class GPT(nn.Module):
         k_cache = None
         v_cache = None
         block_count = 0
+        ########CLA related modification#############
         for block in self.transformer.h:
             x, k, v = block(x, stored_k = k_cache, stored_v = v_cache, block_count = block_count)
             k_cache = k
             v_cache = v
             block_count += 1
         x = self.transformer.ln_f(x)
-
+        ########CLA related modification#############
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
