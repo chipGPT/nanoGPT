@@ -923,16 +923,12 @@ class Trainer:
 
                     ## Get first batch
                     i_first_batch = softmax_input[0]
-                    print(i_first_batch.shape)
-                    print(i_first_batch)
                     i_first_batch[i_first_batch == float('-inf')] = float('NaN')
 
                     for i, i_head in enumerate(i_first_batch):
                         ## Flatten across heads, height, and width
                         flattened = i_head.view(-1)
 <<<<<<< HEAD
-                        print("flattened", flattened)
-
 =======
 >>>>>>> upstream/master
                         
