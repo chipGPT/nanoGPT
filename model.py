@@ -104,7 +104,8 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         self.window_size = config.window_size
-        self.n_embd = config.n_embd
+        self.sharing_factor = config.sharing_factor
+        self.n_layer = config.n_layer
         self.gate = config.gate
         self.use_fire_embeddings = None
         if config.use_fire_embeddings:
@@ -165,7 +166,9 @@ class CausalSelfAttention(nn.Module):
 
         q = self.c_attn_q(x)
         ########CLA related modification#############
-        if stored_k is not None and stored_v is not None and block_count % 4 != 0:
+        assert self.sharing_factor != 0
+        assert self.sharing_factor <= self.n_layer
+        if stored_k is not None and stored_v is not None and (block_count % self.sharing_factor) != 0:
             # print("using stored k and v")
             # print("block count: ", block_count)
             k = stored_k
