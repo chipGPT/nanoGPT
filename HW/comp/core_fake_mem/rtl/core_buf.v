@@ -35,9 +35,6 @@ module core_buf #(
     output                      clink_rvalid,
 
     // Channel - Activation Buffer for MAC Operation
-    //input                     abuf_mux,           // Annotate for Double-Buffering ABUF
-    //input       [ABUF_ADDR-1:0] abuf_waddr,
-    //input       [ABUF_ADDR-1:0] abuf_raddr,
     input                       abuf_ren,
     output      [ABUF_DATA-1:0] abuf_rdata,
     output  reg                 abuf_rvalid,
@@ -73,43 +70,12 @@ module core_buf #(
         .rdata                  (abuf_rdata_mem)
     );
 
-    /*
-    mem_db  #(.DATA_BIT(LBUF_BIT), .DEPTH(LBUF_DEPTH))  abuf_inst (
-        .clk                    (clk),
-        .sw                     (abuf_mux),
-        .waddr                  (abuf_waddr),
-        .wen                    (abuf_wen),
-        .wdata                  (abuf_wdata),
-        .raddr                  (abuf_raddr),
-        .ren                    (abuf_ren),
-        .rdata                  (abuf_rdata)
-    );
-    */
-
     always @(posedge clk or negedge rstn) begin
         if(~rstn)begin
             abuf_raddr <= '0;
             abuf_waddr <= '0;
             reuse_raddr <= '0;
         end else begin
-            // if(abuf_ren & abuf_wen)begin
-            //     //FIFO DEPTH must be power of 2, otherwise won't work
-            //     abuf_raddr <= abuf_raddr + 1;
-            //     abuf_waddr <= abuf_waddr + 1;
-            //     reuse_raddr<= reuse_raddr+ 1;
-            // end else if(abuf_ren & ~abuf_empty)begin
-            //     abuf_raddr <= abuf_raddr + 1;
-            //     reuse_raddr<= reuse_raddr+ 1;
-            // end else if(abuf_wen & ~abuf_reuse_ren & ~abuf_full & ~abuf_reuse_rst)begin
-            //     abuf_waddr <= abuf_waddr + 1;
-            // end else if(abuf_wen & abuf_reuse_ren  & ~abuf_full & ~abuf_reuse_rst)begin
-            //     abuf_waddr <= abuf_waddr + 1;
-            //     reuse_raddr<= reuse_raddr+ 1;
-            // end else if(abuf_reuse_ren & ~abuf_reuse_rst) begin
-            //     reuse_raddr<= reuse_raddr+ 1;
-            // end else if(abuf_reuse_ren & abuf_reuse_rst) begin
-            //     reuse_raddr<= abuf_raddr;
-            // end
             if(abuf_ren & abuf_wen) begin
                 abuf_raddr <= abuf_raddr + 1;
                 abuf_waddr <= abuf_waddr + 1;
