@@ -1,3 +1,4 @@
+
 module layer_norm #(
     parameter sig_width = 10,
     parameter exp_width = 5,
