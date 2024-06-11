@@ -84,9 +84,6 @@ module core_top #(
     input       [GBUS_ADDR-1:0] cmem_raddr,
     input                       cmem_ren,
     // Local Buffer Access for Weight and KV Cache
-    //input                     lbuf_mux,       // Annotate for Double-Buffering LBUF
-    //input       [LBUF_ADDR-1:0] lbuf_waddr,
-    //input       [LBUF_ADDR-1:0] lbuf_raddr,
     input                       lbuf_ren,
     input                       lbuf_reuse_ren, //reuse pointer logic, when enable
     input                       lbuf_reuse_rst,  //reuse reset logic, when first round of reset is finished, reset reuse pointer to current normal read pointer value
@@ -95,9 +92,6 @@ module core_top #(
     output                      lbuf_full,
     output                      lbuf_almost_full,
     // Local Buffer Access for Activation
-    //input                     abuf_mux,
-    //input       [LBUF_ADDR-1:0] abuf_waddr,
-    //input       [LBUF_ADDR-1:0] abuf_raddr,
     input                       abuf_ren,
     input                       abuf_reuse_ren, //reuse pointer logic, when enable
     input                       abuf_reuse_rst,  //reuse reset logic, when first round of reset is finished, reset reuse pointer to current normal read pointer value
@@ -162,9 +156,6 @@ module core_top #(
         .cmem_raddr             (cmem_raddr),
         .cmem_ren               (cmem_ren),
 
-        //.lbuf_mux             (lbuf_mux),
-        //.lbuf_waddr             (lbuf_waddr),
-        //.lbuf_raddr             (lbuf_raddr),
         .lbuf_ren               (lbuf_ren),
         .lbuf_reuse_ren         (lbuf_reuse_ren),
         .lbuf_reuse_rst         (lbuf_reuse_rst),
@@ -191,9 +182,6 @@ module core_top #(
         .clink_rdata            (hlink_rdata),
         .clink_rvalid           (hlink_rvalid),
 
-        //.abuf_mux             (abuf_mux),
-        //.abuf_waddr             (abuf_waddr),
-        //.abuf_raddr             (abuf_raddr),
         .abuf_ren               (abuf_ren),
         .abuf_rdata             (abuf_rdata),
         .abuf_reuse_ren         (abuf_reuse_ren),
