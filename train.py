@@ -118,6 +118,7 @@ def parse_args():
 
     # POSITIONAL EMBEDDING VARIATIONS
     model_group.add_argument('--use_rotary_embeddings', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--sym_rot_num_angles', type=int, default=512, help="number of angles to use for symmetric rope variant")
     model_group.add_argument("--rope_variant", type=str, default="rope", choices=["shortrope", "rope"])
     model_group.add_argument("--shortrope_length", type=int, default="16", help="number of embeddings to use with rope, must be <= length, and be even")
     model_group.add_argument('--use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction)
@@ -204,6 +205,9 @@ def parse_args():
 
     ### Sequence Length Division https://arxiv.org/abs/2309.
     model_group.add_argument('--div_by_seq_len', default=False, action=argparse.BooleanOptionalAction)
+
+    # Gradient Checkpointing
+    training_group.add_argument('--use_gradient_checkpointing', default=False, action=argparse.BooleanOptionalAction, help="Memory efficient training, but takes longer time to train due to trading compute time for memory efficiency. For best memory tradeoff omit the --compile flag. For medium memory tradeoff add --compile.")
 
     # Optimizer args
     training_group.add_argument('--max_iters', default=3500, type=int)
@@ -346,6 +350,7 @@ class Trainer:
         # TODO only add if they are defined from the argparse
         self.model_args = {action.dest: getattr(self.args, action.dest) for action in self.model_group._group_actions}
         self.model_args['vocab_size'] = None
+        self.model_args['use_gradient_checkpointing'] = self.args.use_gradient_checkpointing
 
         if self.args.init_from == 'scratch':
             self.model_args['vocab_size'] = self.get_vocab_size_from_meta()

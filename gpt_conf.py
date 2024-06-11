@@ -12,6 +12,10 @@ class GPTConfig:
     window_size: int = 128
     gate: bool = False
 
+    # Training options
+    ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
+    use_gradient_checkpointing: bool = False
+
     # MLP Options
     use_parallel_mlp: bool = False
     use_swiglu: bool = False
@@ -79,6 +83,7 @@ class GPTConfig:
     use_fire_embeddings: bool = False
     shared_fire_embeddings: bool = False
     use_rotary_embeddings: bool = False
+    sym_rot_num_angles: int = 512
     rope_variant: str = "rope" # options: "shortrope", "rope"
     shortrope_length: int = 8 # number of embeddings to use in shortrope
 
