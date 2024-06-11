@@ -16,11 +16,8 @@ module counter
 always_ff @(posedge clk or negedge rstn) begin
     if(!rstn) begin
         out <= 0;
-//      inc_d <= 0;
     end
     else begin
-//      inc_d <= inc;
-	    //if ((inc&&overflow) || new_inst) out<=0;
         if ((inc && overflow) ) out <= 0;
 	    else if (inc) out <= out+1;
 	    else out <= out;
