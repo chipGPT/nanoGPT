@@ -74,22 +74,6 @@ module consmax#(
         end
     endgenerate
 
-    // integer m,n;
-    // always @(posedge clk or negedge rstn) begin
-    //     if(!rstn) begin
-    //         odata<='0;
-    //     end
-    //     else begin
-    //         for(m=0;m<`ARR_HNUM;m++) begin
-    //             for(n=0;n<`ARR_GBUS_DATA/`ARR_IDATA_BIT;n++) begin
-    //                 if(odata_valid[m][n]) begin
-    //                     odata[m][n] <= odata_w[m][n];
-    //                 end
-    //             end
-    //         end
-    //     end
-    // end
-
 endmodule
 
 module consmax_block #(
@@ -216,11 +200,6 @@ module consmax_block #(
     // FP Multiplication: Produce exp(Si)
     wire    [LUT_DATA-1:0]  lut_product;
 
-    // mul_fp #(.EXP_BIT(EXP_BIT), .MAT_BIT(MAT_BIT), .DATA_BIT(LUT_DATA)) fpmul_inst (
-    //     .idataA                 (lut_rdata[0]),
-    //     .idataB                 (lut_rdata[1]),
-    //     .odata                  (lut_product)
-    // );
     DW_fp_mult #(MAT_BIT, EXP_BIT, 0, 0)
                 mult_fp ( .a(lut_rdata[0]), .b(lut_rdata[1]), .rnd(3'b000), .z(lut_product));
 
