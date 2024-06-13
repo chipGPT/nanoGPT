@@ -176,6 +176,5 @@ module gelu #(
     );
 
 endmodule
-
 `endif
 
