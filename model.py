@@ -100,14 +100,15 @@ class CausalSelfAttention(nn.Module):
         self.c_attn_k = nn.Linear(config.n_embd, self.kv_dim, bias=config.bias)
         self.c_attn_v = nn.Linear(config.n_embd, self.kv_dim, bias=config.bias)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.sharing_factor = config.sharing_factor
+        self.n_layer = config.n_layer
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         self.window_size = config.window_size
-        self.sharing_factor = config.sharing_factor
-        self.n_layer = config.n_layer
+        self.n_embd = config.n_embd
         self.gate = config.gate
         self.use_fire_embeddings = None
         if config.use_fire_embeddings:
@@ -185,51 +186,52 @@ class CausalSelfAttention(nn.Module):
             #
             k = self.c_attn_k(x)
             v = self.c_attn_v(x)
-        ########CLA related modification#############
-            if self.rotary_emb_q is not None:
-                q = self.rotary_emb_q(q)
-                k = self.rotary_emb_k(k)
 
-            if self.window_size is not None:
-                window_mask = torch.ones((1, 1, T, T), device=x.device)
-                window_mask = torch.triu(window_mask, diagonal=-self.window_size)
-                window_mask = self.bias[:,:,:T,:T] * window_mask
+        if self.rotary_emb_q is not None:
+            q = self.rotary_emb_q(q)
+            k = self.rotary_emb_k(k)
 
-            if self.gate:
-                if self.n_kv_group == self.n_head:
-                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    gate_ = torch.sigmoid(Gating(x))
-                    q = q * gate_
-                    k = k * gate_
-                    v = v * gate_
-                else:
-                    # TODO: Test more methods to merge Attention Gates with GQA
-                    # TODO: Evaluate each method's ability to even out parameter sizes
-                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                    gate_qx = Gating_q(x)
-                    gate_q = torch.sigmoid(gate_qx)
-                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                    q = q * gate_q
-                    k = k * gate_kv
-                    v = v * gate_kv
+        if self.window_size is not None:
+            window_mask = torch.ones((1, 1, T, T), device=x.device)
+            window_mask = torch.triu(window_mask, diagonal=-self.window_size)
+            window_mask = self.bias[:,:,:T,:T] * window_mask
+
+        if self.gate:
+            if self.n_kv_group == self.n_head:
+                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                gate_ = torch.sigmoid(Gating(x))
+                q = q * gate_
+                k = k * gate_
+                v = v * gate_
+            else:
+                # TODO: Test more methods to merge Attention Gates with GQA
+                # TODO: Evaluate each method's ability to even out parameter sizes
+                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                gate_qx = Gating_q(x)
+                gate_q = torch.sigmoid(gate_qx)
+                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
+                q = q * gate_q
+                k = k * gate_kv
+                v = v * gate_kv
+
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
-        reshaped_k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
-        reshaped_v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
 
         y = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, reshaped_k, reshaped_v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
             att = None
             # manual implementation of attention
             if self.n_head != self.n_kv_group:
-              k_repeated = reshaped_k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
-              att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(reshaped_k.size(-1))
+              k_repeated = k.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+              att = (q @ k_repeated.transpose(-2, -1)) / math.sqrt(k.size(-1))
             else:
-              att = (q @ reshaped_k.transpose(-2, -1)) * (1.0 / math.sqrt(reshaped_k.size(-1)))
+              att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
 
 
             # apply masks
@@ -253,16 +255,14 @@ class CausalSelfAttention(nn.Module):
 
             att = self.attn_dropout(att)
             if self.n_head != self.n_kv_group:
-                v_repeated = reshaped_v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
+                v_repeated = v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
                 y = att @ v_repeated # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
             else:
-                y = att @ reshaped_v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        # print("k shape: ", k.shape)
-        # print(k[0][0][0])
         return y, k, v
 
 
@@ -335,23 +335,27 @@ class Block(nn.Module):
         else:
             self.mlp = mlp
 
-    def forward(self, x):
-        def custom_forward(*inputs):
+    def forward(self, x, stored_k=None, stored_v=None, block_count=0):
+        def custom_forward(*inputs, stored_k=None, stored_v=None, block_count=0):
             x = inputs[0]
             if self.use_post_ln:
                 if self.use_parallel_mlp:
-                    x = self.ln_1(x + self.attn(x) + self.mlp(x))
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = self.ln_1(x + attn_output + self.mlp(x))
                 else:
-                    x = self.ln_1(x + self.attn(x))
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = self.ln_1(x + attn_output)
                     x = self.ln_2(x + self.mlp(x))
             else:
                 if self.use_parallel_mlp:
                     ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1) + self.mlp(ln_1)
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = x +attn_output + self.mlp(ln_1)
                 else:
-                    x = x + self.attn(self.ln_1(x))
+                    attn_output, new_k, new_v = self.attn(self.ln_1(x), stored_k, stored_v, block_count)
+                    x = x + attn_output
                     x = x + self.mlp(self.ln_2(x))
-            return x
+            return x, new_k, new_v
 
         if self.use_gradient_checkpointing and x.requires_grad:
             return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
@@ -461,15 +465,20 @@ class GPT(nn.Module):
           x = self.transformer.drop(tok_emb)
 
         x.requires_grad_(True)  # Ensure requires_grad is True
-
+        k_cache = None
+        v_cache = None
+        block_count = 0
         for block in self.transformer.h:
             if self.config.use_gradient_checkpointing:
                 x = checkpoint.checkpoint(block, x, use_reentrant=False)
             else:
-                x = block(x)
+                x, k, v = block(x, stored_k = k_cache, stored_v = v_cache, block_count = block_count)
+                k_cache = k
+                v_cache = v
+                block_count += 1
 
         x = self.transformer.ln_f(x)
-        ########CLA related modification#############
+
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
