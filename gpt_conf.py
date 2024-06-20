@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 
 @dataclass
 class GPTConfig:
@@ -13,9 +14,18 @@ class GPTConfig:
     window_size: int = 128
     gate: bool = False
 
+    # Training options
+    ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
+    use_gradient_checkpointing: bool = False
+
     # MLP Options
     use_parallel_mlp: bool = False
-    use_swiglu: bool = False
+    mlp_variant: str = "mlp"
+
+    ## KAN Option
+    kan_poly_order: int = 3
+    kan_base_activation: str = "silu"
+    kan_middle_layers: List[int] = field(default_factory=lambda: [])
 
     # Shared parameters
     # MLP
@@ -80,8 +90,13 @@ class GPTConfig:
     use_fire_embeddings: bool = False
     shared_fire_embeddings: bool = False
     use_rotary_embeddings: bool = False
+    sym_rot_num_angles: int = 512
     rope_variant: str = "rope" # options: "shortrope", "rope"
     shortrope_length: int = 8 # number of embeddings to use in shortrope
+
+    ## Embedding Intialization Options
+    embedding_mean_init: float= 0.0
+    embedding_std_init: float= 0.02
 
     # Structuring Options, remember to compile the model
     use_post_ln: bool = True
@@ -98,3 +113,8 @@ class GPTConfig:
 
     # Linear Alternatives
     linear_variant: str = "linear"
+
+    ## Linear Initialization Options
+    linear_mean_init: float= 0.0
+    linear_std_init: float= 0.02
+
