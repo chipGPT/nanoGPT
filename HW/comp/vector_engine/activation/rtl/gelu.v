@@ -14,6 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//GeLU function: GELU(x) = xP(X <= x) = x Φ(x) ≈ 0.5x(1 + tanh[(sqrt(2 / PI)(x + 0.044715 x^3)])
+//GeLU paper: https://arxiv.org/pdf/1606.08415v3.pdf 
+
 `ifndef __GELU_V_
 `define __GELU_V_
 
