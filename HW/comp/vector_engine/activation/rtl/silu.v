@@ -14,6 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//SiLU function: silu(x)=x∗σ(x),where σ(x) is the logistic sigmoid.
+//SiLU paper: https://arxiv.org/pdf/1702.03118
+
 `ifndef __SILU_V_
 `define __SILU_V_
 
