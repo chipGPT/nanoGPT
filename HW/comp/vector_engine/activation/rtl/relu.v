@@ -14,6 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//ReLU function: f(x) = max(0, x)
+//ReLU paper: https://arxiv.org/pdf/1803.08375
+
 `ifndef __RELU_V_
 `define __RELU_V_
 
