@@ -8,6 +8,7 @@ import pickle
 import shutil
 import sys
 import time
+import torch.nn.utils.prune as prune
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -269,6 +270,9 @@ def parse_args():
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
 
+    #pruning args
+    model_group.add_argument('--prune', default=False, action=argparse.BooleanOptionalAction)
+
     # Visualization args
     logging_group.add_argument('--statistic', choices=[
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
@@ -311,7 +315,6 @@ def initialize_statistics(num_layers, num_heads):
             stats['o_min'].append([[] for _ in range(num_heads)])
 
         return stats
-
 
 class Trainer:
 
@@ -728,6 +731,21 @@ class Trainer:
 
                     self.create_box_plot(plot_data, graph_y_labels, timestamp, data_type, stat_type)
 
+    def apply_pruning(self, prune_percentage):
+        parameters_to_prune = []
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                parameters_to_prune.append((module, 'weight'))
+
+        prune.global_unstructured(
+            parameters_to_prune,
+            pruning_method=prune.L1Unstructured,
+            amount=prune_percentage,
+        )
+
+        for module, _ in parameters_to_prune:
+            prune.remove(module, 'weight')
+
     def train(self):
         self.X, self.Y = self.get_batch('train')
         t0 = time.time()
@@ -1015,6 +1033,14 @@ class Trainer:
 
             # End of training actions
             if self.iter_num > self.args.max_iters:
+                if self.args.prune:
+                    original_model = self.model
+                    for prune_percentage in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+                        self.model = original_model
+                        self.apply_pruning(prune_percentage)
+                        losses = self.estimate_loss()
+                        print(f"Prune Percentage: {prune_percentage}, val loss {losses['val']:.4f}")
+                    self.model = original_model
                 self.plot_statistics(graph_y_labels)
                 if self.args.only_save_checkpoint_at_end:
                     checkpoint = {

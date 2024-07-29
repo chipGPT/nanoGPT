@@ -4,6 +4,8 @@ import os
 import pickle
 from contextlib import nullcontext
 from datetime import datetime
+from collections import OrderedDict
+import torch.nn.utils.prune as prune
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,7 +40,9 @@ def parse_args():
     parser.add_argument('--block_size', type=int, default=None, help="Block size for context length, default is model's block size")
     parser.add_argument('--sym_rot_num_angles', type=int, default=None, help="Number of angles for symmetrical rotary embedding")
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
-
+    parser.add_argument("--quant_weights_file", type=str, default=None, help="File to export the quantized weights and scale factor")
+    parser.add_argument("--visualize_weights_dir", type=str, default=None, help="Folder to save heatmaps of attention weights for all layers")
+    parser.add_argument("--prune_percentage", type=float, default=0, help="Percentage of weights to prune")
     return parser.parse_args()
 
 
@@ -88,7 +92,73 @@ def save_args(args, out_dir):
     with open(os.path.join(out_dir, 'args.json'), 'w') as f:
         json.dump(vars(args), f, indent=4)
 
+def save_quantized_weights(state_dict, out_file):
+    to_save = OrderedDict()
+    for k, v in list(state_dict.items()):
+        if k.endswith("weight") or k.endswith("binarization_bias"):
+            to_save[k] = v.cpu().numpy()
+        if k.endswith("quantized_bias") or k.endswith("bias_norm") or k.endswith("zero_point") or k.endswith("quantized_weight") or k.endswith("weight_norm"):
+            to_save[k] = v.cpu().numpy()
+    with open(f"{out_file}.pkl", 'wb') as f:
+        pickle.dump(to_save, f)
 
+def visualize_weights(weights_dir, out_file, n_layers):
+    filename = f"{out_file}.pkl"
+    with open(filename, 'rb') as f:
+        weights = pickle.load(f)
+    for i in range(n_layers):
+        plt.rcParams["figure.figsize"] = [11, 3.5]
+        plt.rcParams["figure.autolayout"] = True
+        fig, (ax1, ax2, ax3) = plt.subplots(ncols=3)
+        if f"transformer.h.{i}.attn.c_attn_q.weight" in weights:
+            q_key = f"transformer.h.{i}.attn.c_attn_q.weight"
+            k_key = f"transformer.h.{i}.attn.c_attn_k.weight"
+            v_key = f"transformer.h.{i}.attn.c_attn_v.weight"
+        sns.heatmap(weights[q_key], ax=ax1)
+        sns.heatmap(weights[k_key], ax=ax2)
+        sns.heatmap(weights[v_key], ax=ax3)
+        ax1.set_title(f"Heatmap of Query Weights for Layer {i}")
+        ax2.set_title(f"Heatmap of Key Weights for Layer {i}")
+        ax3.set_title(f"Heatmap of Value Weights for Layer {i}")
+        #save to local dir
+        #create a dir if it does not exist
+        os.makedirs(weights_dir, exist_ok=True)
+        plt.savefig(f"{weights_dir}/layer_{i}_weights.png")
+
+def apply_pruning(model, prune_percentage, visualize_weights_dir):
+    parameters_to_prune = []
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            parameters_to_prune.append((module, 'weight', name))
+
+    # Prepare the list for pruning
+    prune_parameters = [(module, param) for module, param, _ in parameters_to_prune]
+
+    prune.global_unstructured(
+        prune_parameters,
+        pruning_method=prune.L1Unstructured,
+        amount=prune_percentage,
+    )
+
+    masks = {}
+    os.makedirs(visualize_weights_dir, exist_ok=True)
+
+    for module, param, name in parameters_to_prune:
+        mask = torch.ones_like(module.weight)
+        mask[module.weight == 0] = 0
+        masks[f"{name}.{param}"] = mask
+        prune.remove(module, param)
+
+        # Visualize and save the mask
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(mask.cpu().numpy(), cmap='viridis', cbar=False)
+        plt.title(f"Pruning Mask for {name}.{param}")
+        plt.xlabel('Weights')
+        plt.ylabel('Neurons')
+        plt.savefig(os.path.join(visualize_weights_dir, f"{name}_{param}_mask.png"))
+        plt.close()
+
+    return model
 def main():
     args = parse_args()
 
@@ -116,14 +186,25 @@ def main():
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        if args.quant_weights_file:
+            save_quantized_weights(state_dict, args.quant_weights_file)
         model.load_state_dict(state_dict)
     else:
         model = GPT.from_pretrained(args.init_from, dict(dropout=0.0))
 
+    model = apply_pruning(model, args.prune_percentage, args.visualize_weights_dir)
+    prune_state_dict = model.state_dict()
+    save_quantized_weights(prune_state_dict, args.quant_weights_file)
     model.eval()
     model.to(args.device)
     if args.compile:
         model = torch.compile(model)
+
+    if args.visualize_weights_dir:
+        if not args.quant_weights_file:
+            print("visualization requires weight file input")
+            return
+        visualize_weights(args.visualize_weights_dir, args.quant_weights_file, model.config.n_layer)
 
     if args.block_size:
         model.update_block_size(args.block_size)
@@ -137,8 +218,8 @@ def main():
     if args.init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']:
 
         meta_paths = [
+                os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl'),
                 os.path.join(args.out_dir, 'meta.pkl'),
-                os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
                 ]
 
         load_meta = False
