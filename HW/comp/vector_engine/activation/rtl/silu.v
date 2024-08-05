@@ -60,21 +60,23 @@ module silu #(
         endcase
     end
 
-    fadd #(
+    fadd_sub #(
         .I_EXP(I_EXP),
         .I_MNT(I_MNT)
     ) fadd_p4 (         // x - 4
         .a_operand(idata),
         .b_operand(const_p4),
+	.sub(1'b1),
         .result(ydet_p4)
     );
 
-    fadd #(
+    fadd_sub #(
         .I_EXP(I_EXP),
         .I_MNT(I_MNT)
     ) fadd_m4 (         // x - (-4)
         .a_operand(idata),
         .b_operand(const_m4),
+	.sub(1'b1),
         .result(ydet_m4)
     );
 
@@ -86,16 +88,17 @@ module silu #(
         .of32(abs_x_div4)
     );
 
-    fadd #(
+    fadd_sub #(
         .I_EXP(I_EXP),
         .I_MNT(I_MNT)
     ) fadd_1mx (        // 1 - abs(x)/4
         .a_operand(const_1),
         .b_operand(abs_x_div4),
+	.sub(1'b1),
         .result(m_x_a)
     );
 
-	fmul #(
+    fmul #(
         .I_EXP(I_EXP),
         .I_MNT(I_MNT)
     ) fmul_1 (          // (1 - abs(x)/4)^2
@@ -121,12 +124,13 @@ module silu #(
         .result(outA)
     );
 
-    fadd #(
+    fadd_sub #(
         .I_EXP(I_EXP),
         .I_MNT(I_MNT)
     ) fadd_B (          // out 0 < x < 4
         .a_operand(idata),
         .b_operand(outA),
+	.sub(1'b0),
         .result(outB)
     );
 
