@@ -145,6 +145,8 @@ def main():
     elif args.sort == 'nan_iter':
         ckpt_data.sort(key=lambda x: x[4], reverse=args.reverse)
 
+    print(ckpt_data)
+
     console = None
     # Check if the TERM environment variable is set to a value that supports ANSI escape codes
     if 'TERM' in os.environ and os.environ['TERM'] in ['xterm', 'xterm-color', 'xterm-256color', 'screen', 'screen-256color', 'tmux', 'tmux-256color']:
@@ -159,6 +161,7 @@ def main():
     table.add_column("Ckpt File", style="", width=max_path_length + 2)
     table.add_column("Best Val Loss", justify="right")
     table.add_column("Iter Num", justify="right")
+    console.print(table)
     if args.inspect_nan:
         table.add_column("NaN Result", justify="right")
         table.add_column("NaN Iter Num", justify="right")

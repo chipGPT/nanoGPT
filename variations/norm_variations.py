@@ -21,12 +21,16 @@ class RMSNorm(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.inputs = []
+        self.outputs = []
         ndim = config.n_embd
         self.gain = nn.Parameter(torch.ones(ndim))
 
     def forward(self, x):
+        self.inputs = x
         rms = x.norm(2, dim=-1, keepdim=True) / math.sqrt(x.size(-1))
-        return x / rms * self.gain
+        self.outputs = x / rms * self.gain
+        return self.outputs
 
 class pRMSNorm(nn.Module):
     """Partial RMS Normalization"""
@@ -54,6 +58,8 @@ class kRMSNorm(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.inputs = []
+        self.outputs = []
         ndim = config.n_embd
         self.gain = nn.Parameter(torch.ones(ndim)) if config.krmsnorm_enable_gain else None
         self.k = config.krmsnorm_num
@@ -90,6 +96,7 @@ class kRMSNorm(nn.Module):
         return x
 
     def forward(self, x):
+        self.inputs = x
         # Calculate the number of elements to use for kRMS
         k = min(x.size(-1), self.k)
 
@@ -129,7 +136,8 @@ class kRMSNorm(nn.Module):
         if self.enable_gain:
             x = x * self.gain
 
-        return x
+        self.output = x
+        return self.output
 
 norm_dictionary = {
     "layernorm": LayerNorm,

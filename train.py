@@ -19,6 +19,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
 from model import GPT, GPTConfig
+from statistics_util.statistic_plots import create_box_plot, plot_statistics
+from statistics_util.rms_plots import graph_RMS, graph_gain
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -286,6 +288,9 @@ def parse_args():
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
     'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min', 'all_stats', 'input_all','output_all'
      ], default='input_mean', help='Select one or all statistics to display, e.g., --statistic input_min, or --statistic all_stats')
+    logging_group.add_argument('--statistic_for', choices=['softmax', 'norm', 'all'], default='softmax', help='Select function to display statistics for')
+    logging_group.add_argument('--RMSNorm_statistic', choices=['RMS', 'gain', 'all'], default=None, help='Display plot graphs specifically for RMSNorm statistics')
+    logging_group.add_argument('--RMSNorm_plot_interval', default=100, type=int, help='Create plot of RMS statistics at certain intervals of iteration')
     logging_group.add_argument('--graph_type', choices=[
     "heatmap", "plot", "boxplot", "all"
      ], default='no_graph', help='Select one of the graph types to display, e.g., --graph_type heatmap, or --graph_type plot')
@@ -338,6 +343,20 @@ def initialize_statistics(num_layers, num_heads):
 
         return stats
 
+def initialize_RMS_statistics(num_layers):
+    stats = {
+        "mean_gain_ln_1": [[] for _ in range(num_layers)],
+        "max_gain_ln_1": [[] for _ in range(num_layers)],
+        "min_gain_ln_1": [[] for _ in range(num_layers)],
+        "mean_gain_ln_2": [[] for _ in range(num_layers)],
+        "max_gain_ln_2": [[] for _ in range(num_layers)],
+        "min_gain_ln_2": [[] for _ in range(num_layers)],
+        "mean_gain_ln_f": [],
+        "max_gain_ln_f": [],
+        "min_gain_ln_f": []
+    }
+    return stats
+
 
 class Trainer:
 
@@ -353,6 +372,7 @@ class Trainer:
 
         self.setup()
         self.stats = initialize_statistics(self.args.n_layer, self.args.n_head)
+        self.RMS_stats = initialize_RMS_statistics(self.args.n_layer)
 
     def setup(self):
         # Setup DDP
@@ -632,128 +652,6 @@ class Trainer:
                 "mfu": running_mfu*100,
             })
 
-    def create_box_plot(self, plot_data, y_labels, timestamp, data_type, stat_type):
-        directory_path = os.path.join(self.args.out_dir, 'images')
-        os.makedirs(directory_path, exist_ok=True)
-
-        # create a boxplot
-        fig = plt.figure(figsize =(10, 7))
-        ax = fig.add_subplot(111)
-
-        # Creating axes instance
-        ax.boxplot(plot_data, sym = '', patch_artist = True, vert = 0)
-
-        # y-axis labels
-        ax.set_yticklabels(y_labels)
-
-        # Removing top axes and right axes
-        # ticks
-        ax.get_xaxis().tick_bottom()
-        ax.get_yaxis().tick_left()
-
-        ax.set_title(f"Boxplot of {data_type} {stat_type}")
-        plt.savefig(f'{directory_path}/{data_type}_{stat_type}_boxplot_{timestamp}.png')
-        plt.close()
-
-    def plot_statistics(self, graph_y_labels):
-            statistics_to_plot = []
-            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
-            directory_path = os.path.join(self.args.out_dir, 'images')
-            os.makedirs(directory_path, exist_ok=True)
-            statistics_to_plot = [self.args.statistic]
-            if self.args.statistic  == "all_stats":
-                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
-                                  'output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
-            elif self.args.statistic == 'input_all':
-                statistics_to_plot = ['input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min']
-            elif self.args.statistic == 'output_all':
-                statistics_to_plot = ['output_mean', 'output_median', 'output_stdev', 'output_max', 'output_min']
-            for stat in statistics_to_plot:
-                parts = stat.split('_')
-                data_type = parts[0]  # 'input' or 'output'
-                stat_type = parts[1]  # 'mean', 'median', 'stdev', 'max', 'min'
-
-                # to decide whether to use the input or output statistics
-                stat_prefix = 'o_' if data_type == 'output' else ''
-
-                # draw the plot
-                if self.args.graph_type == 'plot' or self.args.graph_type == 'all':
-                    fig = go.Figure()
-                    plt.figure(figsize=(18, 8))
-                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
-                        for head_idx, data in enumerate(stats_per_layer):
-                            fig.add_trace(go.Scatter(
-                                x=list(range(len(data))),
-                                y=data,
-                                mode='lines',
-                                name=f'Layer {layer_idx + 1} Head {head_idx + 1}'
-                            ))
-                            plt.plot(data, label=f'Layer {layer_idx + 1} Head {head_idx + 1}')
-
-                    # add titles and legend to Plotly
-                    fig.update_layout(
-                        title=f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training',
-                        xaxis_title='Training Iteration',
-                        yaxis_title=f'{stat_type.title()} of {data_type.capitalize()}',
-                        legend_title='Head/Layer',
-                        height=890,
-                        width=1200
-                    )
-                    fig.write_html(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.html')
-                    fig.write_image(f'{directory_path}/{data_type}_{stat_type}_changes_plotly_{timestamp}.png')
-
-                    # add titles and lengend to Matplotlib
-                    plt.title(f'Change in {stat_type.title()} Values for {data_type.capitalize()} During Training')
-                    plt.xlabel('Training Iteration')
-                    plt.ylabel(f'{stat_type.title()} of {data_type.capitalize()}')
-                    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Head/Layer')
-                    # plt.legend(title='Head/Layer')
-                    plt.grid(True)
-                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_changes_plot_{timestamp}.png')
-                    plt.close()
-
-                if self.args.graph_type == 'heatmap' or self.args.graph_type == 'all':
-                    #data is the value of #iter
-                    # create xlabels
-                    num_iters = len(data)
-                    unit_size = num_iters // 10
-                    x_labels = [i*unit_size for i in range(10)]
-
-                    # create plot_data
-                    plot_data = []
-                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
-                        for head_idx, data in enumerate(stats_per_layer):
-                            plot_data.append([])
-                            for i in x_labels:
-                                plot_data[-1].append(data[i])
-                    plot_data = np.array(plot_data)
-
-                    ######
-                    fig, ax = plt.subplots(figsize=(8,10))
-                    im = ax.imshow(plot_data)
-                    # Name the x and y axis
-                    ax.set_xticks(np.arange(len(x_labels)), labels=x_labels)
-                    ax.set_yticks(np.arange(len(graph_y_labels)), labels=graph_y_labels)
-                    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-                    ax.set_xlabel("Number of Iterations", fontweight="bold")
-
-                    # Create a colorbar
-                    cbar = ax.figure.colorbar(im, ax=ax)
-                    cbar.ax.set_ylabel(stat_type, rotation=-90, va="bottom")
-
-                    ax.set_title(f"Heatmap of {data_type} {stat_type}")
-                    plt.savefig(f'{directory_path}/{data_type}_{stat_type}_heatmap_{timestamp}.png')
-                    plt.close()
-
-                if self.args.graph_type == 'boxplot' or self.args.graph_type == 'all':
-                    # create plot_data
-                    plot_data = []
-                    for layer_idx, stats_per_layer in enumerate(self.stats[stat_prefix + stat_type]):
-                        for head_idx, data in enumerate(stats_per_layer):
-                            plot_data.append(np.array(data))
-
-                    self.create_box_plot(plot_data, graph_y_labels, timestamp, data_type, stat_type)
-
     def train(self):
         self.X, self.Y = self.get_batch('train')
         t0 = time.time()
@@ -812,7 +710,9 @@ class Trainer:
                         torch.save(checkpoint, os.path.join(self.args.out_dir, 'ckpt.pt'))
                 if self.args.patience is not None and num_steps_with_worse_loss >= self.args.patience:
                     print(f"Early Stopping: loss has not decreased in {self.args.patience + 1} steps")
-                    self.plot_statistics(graph_y_labels)
+                    if (self.args.statistic_for == "softmax" and self.args.softmax_variant_attn in ['consmax', 'polymax', 'strongermax']) \
+                        or self.args.statistic_for == "norm":
+                        plot_statistics(self.args, self.stats, graph_y_labels)
                     break
                 if losses['val'] > self.best_val_loss:
                     num_steps_with_worse_loss += 1
@@ -867,9 +767,54 @@ class Trainer:
                     sys.exit("Exiting training loss is NaN")
                 self.log_metrics_non_validation(lossf, running_mfu, self.iter_num)
 
+            if self.args.statistic_for == "norm":
+                timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
+                norm_names = ['ln_1', 'ln_2', 'ln_f']
+                if self.args.RMSNorm_statistic == "gain" or self.args.RMSNorm_statistic == "all":
+                    ln_f_gain_input_data = eval(f"self.model.transformer.ln_f.gain").to('cpu').to(torch.float32)
+                    self.RMS_stats["mean_gain_ln_f"].append(torch.mean(ln_f_gain_input_data).detach().numpy())
+                    self.RMS_stats["min_gain_ln_f"].append(torch.min(ln_f_gain_input_data).detach().numpy())
+                    self.RMS_stats["max_gain_ln_f"].append(torch.max(ln_f_gain_input_data).detach().numpy())
+                    for name in ['ln_1', 'ln_2']:
+                        for layer in range(self.args.n_layer):
+                            gain_input_data = eval(f"self.model.transformer.h[{layer}].{name}.gain").to('cpu').to(torch.float32)
+                            self.RMS_stats[f"mean_gain_{name}"][layer].append(torch.mean(gain_input_data).detach().numpy())
+                            self.RMS_stats[f"min_gain_{name}"][layer].append(torch.min(gain_input_data).detach().numpy())
+                            self.RMS_stats[f"max_gain_{name}"][layer].append(torch.max(gain_input_data).detach().numpy())
+                
+                if (self.args.RMSNorm_statistic == "RMS" or self.args.RMSNorm_statistic == "all") and self.iter_num % self.args.RMSNorm_plot_interval == 0 and self.iter_num != 0:
+                    for name in norm_names:
+                        if name == 'ln_f':
+                            RMSNorm_input_data = eval(f"self.model.transformer.{name}.inputs").to('cpu').to(torch.float32)
+                            if self.args.norm_variant_output == "krmsnorm":
+                                graph_RMS(self.args.out_dir, RMSNorm_input_data, name, timestamp, self.iter_num, krmsnorm_num=self.args.krmsnorm_num)
+                            else:
+                                graph_RMS(self.args.out_dir, RMSNorm_input_data, name, timestamp, self.iter_num)
+                        else:
+                            for layer in range (self.args.n_layer):
+                                RMS_input_location = f"transformer.h[{layer}].{name}.inputs"
+                                RMSNorm_input_data = eval(f"self.model.{RMS_input_location}").to('cpu').to(torch.float32)
+                                if self.args.norm_variant_attn == "krmsnorm":
+                                    graph_RMS(self.args.out_dir, RMSNorm_input_data, name, timestamp, self.iter_num, layer, self.args.krmsnorm_num)
+                                else:
+                                    graph_RMS(self.args.out_dir, RMSNorm_input_data, name, timestamp, self.iter_num, layer)
+            
+                if (self.args.RMSNorm_statistic == "gain" or self.args.RMSNorm_statistic == "all") and self.iter_num == self.args.max_iters:
+                    graph_gain(self.args.out_dir, self.RMS_stats, self.args.max_iters, self.args.n_layer, timestamp)
+                    # RMS_input_location = f"transformer.h[{layer}].ln_1.inputs"
+                    # RMSNorm_input_data = eval(f"self.model.{RMS_input_location}").to('cpu').to(torch.float32)
+                    # RMSNorm_gain_data = eval(f"self.model.transformer.h[{layer}].ln_1.gain").to('cpu').to(torch.float32)
+                    # RMSNorm_input_data = RMSNorm_input_data.detach().numpy()
+                    # RMSNorm_gain_data = RMSNorm_gain_data.detach().numpy()
+                    # np.save("RMS_input", RMSNorm_input_data)
+                    # np.save("RMS_gain", RMSNorm_gain_data)
 
+                    # RMSNorm_input_data = np.load("RMS_input.npy")
+                    # RMSNorm_gain_data = np.load("RMS_gain.npy")
+                    # print("RMSNorm_input_data:", RMSNorm_input_data)
+                    # print("RMSNorm_gain_data:", RMSNorm_gain_data)
 
-            if self.args.softmax_variant_attn in ['consmax', 'polymax', 'strongermax']:
+            if self.args.statistic_for == "softmax" and self.args.softmax_variant_attn in ['consmax', 'polymax', 'strongermax']:
                 betas = []
                 gammas = []
                 i_sum_vals = []
@@ -888,6 +833,7 @@ class Trainer:
 
                 box_plot_input_data = []
                 box_plot_output_data = []
+
 
                 for layer in range (self.args.n_layer):
                     # Inputs
@@ -984,12 +930,12 @@ class Trainer:
                 if self.args.box_plot_statistic and (self.iter_num % self.args.box_plot_interval == 0) and self.iter_num != 0:
                     timestamp = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
                     if self.args.box_plot_statistic == "all":
-                        self.create_box_plot(box_plot_input_data, graph_y_labels, timestamp, "input", self.iter_num)
-                        self.create_box_plot(box_plot_output_data, graph_y_labels, timestamp, "output", self.iter_num)
+                        create_box_plot(self.args.out_dir, box_plot_input_data, graph_y_labels, timestamp, "input", self.iter_num)
+                        create_box_plot(self.args.out_dir, box_plot_output_data, graph_y_labels, timestamp, "output", self.iter_num)
                     elif self.args.box_plot_statistic == "input":
-                        self.create_box_plot(box_plot_input_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
+                        create_box_plot(self.args.out_dir, box_plot_input_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
                     else:
-                        self.create_box_plot(box_plot_output_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
+                        create_box_plot(self.args.out_dir, box_plot_output_data, graph_y_labels, timestamp, self.args.box_plot_statistic, self.iter_num)
 
 
                 self.write_to_csv(self.iter_num,
@@ -1041,7 +987,9 @@ class Trainer:
 
             # End of training actions
             if self.iter_num > self.args.max_iters:
-                self.plot_statistics(graph_y_labels)
+                if (self.args.statistic_for == "softmax" and self.args.softmax_variant_attn in ['consmax', 'polymax', 'strongermax']) \
+                    or self.args.statistic_for == "norm":
+                    plot_statistics(self.args, self.stats, graph_y_labels)
                 if self.args.only_save_checkpoint_at_end:
                     checkpoint = {
                         'model': self.raw_model.state_dict(),
