@@ -94,8 +94,9 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
         assert config.n_embd % config.n_head == 0
+
         # key, query, value projections for all heads, but in a batch
-        self.c_attn_q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_attn_q = linear_dictionary[config.linear_variant_attn](config.n_embd, config.n_embd, config=config, bias=config.bias)
 
         self.n_head = config.n_head
         if config.n_kv_group == None:
@@ -105,9 +106,10 @@ class CausalSelfAttention(nn.Module):
             self.n_kv_group = config.n_kv_group
 
         self.kv_dim = (config.n_embd // config.n_head) * self.n_kv_group
-        self.c_attn_k = nn.Linear(config.n_embd, self.kv_dim, bias=config.bias)
-        self.c_attn_v = nn.Linear(config.n_embd, self.kv_dim, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_attn_k = linear_dictionary[config.linear_variant_attn](config.n_embd, self.kv_dim, config=config, bias=config.bias)
+        self.c_attn_v = linear_dictionary[config.linear_variant_attn](config.n_embd, self.kv_dim, config=config, bias=config.bias)
+        self.c_proj = linear_dictionary[config.linear_variant_attn](config.n_embd, config.n_embd, config=config, bias=config.bias)
+
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -189,7 +191,7 @@ class CausalSelfAttention(nn.Module):
 
         if self.gate:
             if self.n_kv_group == self.n_head:
-                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                Gating = linear_dictionary[config.linear_variant_gate](self.n_embd, self.n_embd, config=config, bias=config.bias)
                 gate_ = torch.sigmoid(Gating(x))
                 q = q * gate_
                 k = k * gate_
@@ -197,8 +199,8 @@ class CausalSelfAttention(nn.Module):
             else:
                 # TODO: Test more methods to merge Attention Gates with GQA
                 # TODO: Evaluate each method's ability to even out parameter sizes
-                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                Gating_q = linear_dictionary[config.linear_variant_gate](self.n_embd, self.n_embd, config=config, bias=config.bias)
+                Gating_kv = linear_dictionary[config.linear_variant_gate](self.n_embd, self.kv_dim, config=config, bias=config.bias)
                 gate_qx = Gating_q(x)
                 gate_q = torch.sigmoid(gate_qx)
                 gate_kv = torch.sigmoid(Gating_kv(gate_qx))
@@ -261,9 +263,6 @@ class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        # Select linear variant
-        self.linear_variant = linear_dictionary[config.linear_variant]
-
         # Select activation variant
         self.activation_variant = activation_dictionary[config.activation_variant]
 
@@ -273,12 +272,12 @@ class MLP(nn.Module):
         if self.mlp_variant == "kan":
             self.kan = linear_dictionary["kan"](config.n_embd, config.n_embd, config=config)
         if self.mlp_variant == "mlp":
-            self.c_fc = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, config=config, bias=config.bias)
-            self.c_proj = linear_dictionary[config.linear_variant](4 * config.n_embd, config.n_embd, config=config, bias=config.bias)
+            self.c_fc = linear_dictionary[config.linear_variant_mlp](config.n_embd, 4 * config.n_embd, config=config, bias=config.bias)
+            self.c_proj = linear_dictionary[config.linear_variant_mlp](4 * config.n_embd, config.n_embd, config=config, bias=config.bias)
         if self.mlp_variant == "swiglu":
-            self.c_fc_in1 = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, config=config)
-            self.c_fc_in2 = linear_dictionary[config.linear_variant](config.n_embd, 4 * config.n_embd, config=config)
-            self.c_fc_out = linear_dictionary[config.linear_variant](4 * config.n_embd, config.n_embd, config=config)
+            self.c_fc_in1 = linear_dictionary[config.linear_variant_mlp](config.n_embd, 4 * config.n_embd, config=config)
+            self.c_fc_in2 = linear_dictionary[config.linear_variant_mlp](config.n_embd, 4 * config.n_embd, config=config)
+            self.c_fc_out = linear_dictionary[config.linear_variant_mlp](4 * config.n_embd, config.n_embd, config=config)
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -308,7 +307,8 @@ class Block(nn.Module):
         norm_variant_attn = norm_dictionary[config.norm_variant_attn]
         self.ln_1 = norm_variant_attn(config)
         if not config.use_parallel_mlp:
-            self.ln_2 = norm_variant_attn(config)
+            norm_variant_mlp = norm_dictionary[config.norm_variant_mlp]
+            self.ln_2 = norm_variant_mlp(config)
 
         self.use_post_ln = config.use_post_ln
         self.use_parallel_mlp = config.use_parallel_mlp
@@ -390,7 +390,7 @@ class GPT(nn.Module):
         if self.softmax_variant_output != "softmax":
             self.softmax_layer_output = softmax_dictionary[config.softmax_variant_output](config)
 
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = linear_dictionary[config.linear_variant_output](config.n_embd, config.vocab_size, config=config, bias=config.bias)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"

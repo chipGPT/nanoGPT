@@ -80,8 +80,9 @@ def parse_args():
     model_group.add_argument('--shared_attn_sym', default=False, action=argparse.BooleanOptionalAction, help="symmetrical attention sharing")
 
     # NORM VARIATIONS
-    model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=["krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
-    model_group.add_argument("--norm_variant_output", type=str, default="rmsnorm", choices=["krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
+    model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=["passthrough", "krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
+    model_group.add_argument("--norm_variant_mlp", type=str, default="rmsnorm", choices=["passthrough", "krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
+    model_group.add_argument("--norm_variant_output", type=str, default="rmsnorm", choices=["passthrough", "krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
     model_group.add_argument("--prmsnorm_pct", default=0.0625, type=float, help="percentage (1 being 100 percent) of first entries used for partial rms" )
     model_group.add_argument("--krmsnorm_num", default=10, type=int, help="max number of first entries for partial rms" )
@@ -117,7 +118,46 @@ def parse_args():
 
     # LINEAR VARIATIONS
     model_group.add_argument(
-        "--linear_variant",
+        "--linear_variant_attn",
+        type=str,
+        default="linear",
+        choices=[
+            "linear",
+            "bitlinear",
+            "bitlinear_rmsnorm",
+            "bitlinear_1p58",
+            "bitlinear_optimized",
+            "kan",
+        ],
+    )
+    model_group.add_argument(
+        "--linear_variant_mlp",
+        type=str,
+        default="linear",
+        choices=[
+            "linear",
+            "bitlinear",
+            "bitlinear_rmsnorm",
+            "bitlinear_1p58",
+            "bitlinear_optimized",
+            "kan",
+        ],
+    )
+    model_group.add_argument(
+        "--linear_variant_gate",
+        type=str,
+        default="linear",
+        choices=[
+            "linear",
+            "bitlinear",
+            "bitlinear_rmsnorm",
+            "bitlinear_1p58",
+            "bitlinear_optimized",
+            "kan",
+        ],
+    )
+    model_group.add_argument(
+        "--linear_variant_output",
         type=str,
         default="linear",
         choices=[

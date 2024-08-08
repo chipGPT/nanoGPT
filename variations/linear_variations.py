@@ -4,6 +4,7 @@ import math
 import torch.nn.functional as F
 from .activation_variations import *
 from functools import lru_cache
+from .bitlinear_norm.bitlinear import BitLinear as BitLinearRMSNorm
 
 class WrappedLinear(nn.Linear):
     """ Adapts nn.Linear to add 'config' parameter for interface polymorphism"""
@@ -156,9 +157,15 @@ class BitLinearOptimized(nn.Linear):
 
     def dequantize_weights(self):
         # Convert quantized_weights back to bfloat16 and compute alpha for the weights
-        bfloat16_weights = self.quantized_weights.to(torch.bfloat16)
-        alpha = bfloat16_weights.mean()
-        return bfloat16_weights * alpha
+        fake_with_f16 = False
+        if fake_with_f16:
+          float16_weights = self.quantized_weights.to(torch.float16)
+          alpha = float16_weights.mean()
+          return float16_weights * alpha
+        else:
+          bfloat16_weights = self.quantized_weights.to(torch.bfloat16)
+          alpha = bfloat16_weights.mean()
+          return bfloat16_weights * alpha
 
     def ste_binarize(self, x):
         # Apply the sign function for binarization
@@ -312,6 +319,7 @@ class KAL_Net(nn.Module):
 
 linear_dictionary = {
     "linear": WrappedLinear,
+    "bitlinear_rmsnorm": BitLinearRMSNorm,
     "bitlinear": BitLinear,
     "bitlinear_optimized": BitLinearOptimized,
     "bitlinear_1p58": BitLinear1p58,

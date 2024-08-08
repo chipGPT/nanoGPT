@@ -1,0 +1,35 @@
+[
+    {
+      "max_iters": ["5000"],
+      "n_layer": ["6"],
+      "n_kv_group": ["6"],
+      "n_head": ["6"],
+      "n_embd": ["384"],
+      "block_size":["256"],
+      "learning_rate":["6.0e-3", "3.0e-3", "1.5e-3"],
+      "warmup_iters":["375"],
+      "weight_decay":["0.15", "0.10", "0.05"],
+      "use_gradient_checkpointing":[false],
+      "beta1":["0.95", "0.9", "0.85"],
+      "beta2":["0.96", "0.95", "0.94"],
+      "grad_clip":["5.0", "10.0", "20.0"],
+      "mlp_variant" : ["mlp"],
+      "shared_mlp_sym" : [true],
+      "shared_mlp_size" : ["1"],
+      "shared_attn_sym" : [false],
+      "shared_attn_size" : ["2"],
+      "linear_variant_attn" : ["bitlinear_rmsnorm"],
+      "linear_variant_mlp" : ["bitlinear_rmsnorm"],
+      "norm_variant_attn" : ["passthrough"],
+      "norm_variant_mlp" : ["passthrough"],
+      "norm_variant_output" : ["rmsnorm"],
+      "softmax_variant_attn": ["softmax", "exppolymax"],
+      "use_abs_pos_embeddings":[true],
+      "use_rotary_embeddings":[false],
+      "device": ["cuda"],
+      "dtype": ["float16"],
+      "compile": [true],
+      "dataset": ["shakespeare_char"]
+    }
+]
+

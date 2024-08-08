@@ -16,6 +16,15 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+class Passthrough(nn.Module):
+    """Identity operation"""
+
+    def __init__(self, config):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
 class RMSNorm(nn.Module):
     """RMS Normalization"""
 
@@ -132,6 +141,7 @@ class kRMSNorm(nn.Module):
         return x
 
 norm_dictionary = {
+    "passthrough": Passthrough,
     "layernorm": LayerNorm,
     "rmsnorm": RMSNorm,
     "prmsnorm": pRMSNorm,
