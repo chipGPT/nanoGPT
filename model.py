@@ -30,7 +30,7 @@ from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
 
-def create_shared_param_group(layer_type, config):
+def create_shared_param_group(layer_type, config, experts=None):
 
     # explore MoE layers being reflected symmetrically
 
@@ -60,7 +60,7 @@ def create_shared_param_group(layer_type, config):
             if layer_type == "mlp":
                 if config.use_moe and i % config.moe_layer_freq == 0:
                     # this iter is an moe layer iter
-                    layer_block = MoELayer(config)
+                    layer_block = MoELayer(config, experts=experts)
                 else:
                     layer_block = MLP(config)
             elif layer_type == "attn":
@@ -361,8 +361,14 @@ class GPT(nn.Module):
         # Initialize and set ouptut normalization (e.g. rmsnorm)
         self.norm_variant_output = norm_dictionary[config.norm_variant_output](config)
 
+        # Create shared experts if flagged
+        if config.share_experts:
+            shared_experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
+        else:
+            shared_experts = None
+
         # Shared Parameters MLP
-        shared_mlp_array = create_shared_param_group("mlp", config)
+        shared_mlp_array = create_shared_param_group("mlp", config, experts=shared_experts)
         # Shared Parameters Attention
         shared_attn_array = create_shared_param_group("attn", config)
 
@@ -661,14 +667,18 @@ class GPT(nn.Module):
 class MoELayer(nn.Module):
     """ Mixture of Experts layer to replace FFN (or every other FFN) """
 
-    def __init__(self, config):
+    def __init__(self, config, experts=None):
         super().__init__()
         self.top_k = config.moe_top_k
         # TODO: implement expert capacity throttling
         # self.expert_capacity = config.expert_capacity
         self.num_experts = config.n_experts
         self.router = router_dictionary[config.moe_router_scheme](config)
-        self.experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
+        # allow for sharing experts by accepting an existing array as input
+        if experts is not None:
+            self.experts = experts
+        else:
+            self.experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
 
     def forward(self, x):
         # Assuming x has shape [batch_size, seq_len, n_embd]

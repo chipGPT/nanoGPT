@@ -18,7 +18,7 @@ class GPTConfig:
     n_experts: int = 8
     moe_top_k: int = 2
     moe_router_scheme: str = "softmax"
-
+    share_experts: bool = False
 
     # Training options
     ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
