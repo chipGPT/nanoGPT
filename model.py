@@ -45,6 +45,9 @@ def create_shared_param_group(layer_type, config, experts=None):
     elif layer_type == "attn":
         shared_size = config.shared_attn_size
         shared_sym = config.shared_attn_sym
+    elif layer_type == "moe":
+        shared_size = config.shared_moe_size
+        shared_sym = config.shared_moe_sym
     else:
         sys.exit(f"{layer_type} not supported, exiting")
 
@@ -361,14 +364,8 @@ class GPT(nn.Module):
         # Initialize and set ouptut normalization (e.g. rmsnorm)
         self.norm_variant_output = norm_dictionary[config.norm_variant_output](config)
 
-        # Create shared experts if flagged
-        if config.share_experts:
-            shared_experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
-        else:
-            shared_experts = None
-
         # Shared Parameters MLP
-        shared_mlp_array = create_shared_param_group("mlp", config, experts=shared_experts)
+        shared_mlp_array = create_shared_param_group("mlp", config)
         # Shared Parameters Attention
         shared_attn_array = create_shared_param_group("attn", config)
 
