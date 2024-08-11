@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, fields
 from typing import List
-
+import json
 @dataclass
 class GPTConfig:
     block_size: int = 1024
@@ -13,6 +13,11 @@ class GPTConfig:
     dropout: float = 0.0
     window_size: int = 128
     gate: bool = False
+    use_moe: bool = False
+    moe_layer_freq: int = 2
+    n_experts: int = 8
+    moe_top_k: int = 2
+    moe_router_scheme: str = "softmax"
 
     # Training options
     ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
@@ -107,14 +112,116 @@ class GPTConfig:
     bias: bool = False # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     prmsnorm_pct: float = 0.0625
     krmsnorm_num: float = 10
+    krmsnorm_quantize_type: str = 'int8'
+    krmsnorm_enable_gain: bool = True
+    krmsnorm_selection_type: str = 'last'
+    krmsnorm_recompute_percentage: float = 0.05
 
     # Activation Alternatives
     activation_variant: str = "gelu"
 
     # Linear Alternatives
-    linear_variant: str = "linear"
+    linear_variant_attn: str = "linear"
+    linear_variant_mlp: str = "linear"
+    linear_variant_q: str = None
+    linear_variant_k: str = None
+    linear_variant_v: str = None
+    linear_variant_attn_proj: str = None
+    linear_variant_mlp_up: str = None
+    linear_variant_mlp_down: str = None
 
     ## Linear Initialization Options
     linear_mean_init: float= 0.0
     linear_std_init: float= 0.02
+
+    # Quantizations
+    
+    ## Embedding Quantizations
+    quantize_wte: bool = False
+    quantize_wpe: bool = False
+    quantize_wte_method: str = "affine_quant"
+    quantize_wte_bits: int = 8
+    quantize_wpe_method: str = "affine_quant"
+    quantize_wpe_bits: int = 8
+
+    ## Activation Quantizations
+    activations_quant_method: str = "affine_quant"
+    quantize_attn_act: bool = False
+    quantize_attn_act_bits: int = 8
+    quantize_attn_act_input: bool = False
+    quantize_attn_act_input_bits: int = None
+    quantize_attn_act_qk_mult_input: bool = False
+    quantize_attn_act_qk_mult_input_bits: int = None
+    quantize_attn_act_softmax_input: bool = False
+    quantize_attn_act_softmax_input_bits: int = None
+    quantize_attn_act_pv_mult_input: bool = False
+    quantize_attn_act_pv_mult_input_bits: int = None
+    quantize_attn_act_pv_mult_output: bool = False
+    quantize_attn_act_pv_mult_output_bits: int = None
+    quantize_attn_act_output: bool = False
+    quantize_attn_act_output_bits: int = None
+    quantize_mlp_act: bool = False
+    quantize_mlp_act_bits: int = 8
+    quantize_mlp_act_input: bool = False
+    quantize_mlp_act_input_bits: int = None
+    quantize_mlp_act_activation_input: bool = False
+    quantize_mlp_act_activation_input_bits: int = None
+    quantize_mlp_act_activation_output: bool = False
+    quantize_mlp_act_activation_output_bits: int = None
+    quantize_mlp_act_output: bool = False
+    quantize_mlp_act_output_bits: int = None
+
+    ## Linear Quantizations
+    quantize_linear_method: str = "affine_quant"
+    quantize_linear_bits: int = 8
+    quantize_linear_attn_q_method: str = None
+    quantize_linear_attn_q_bits: int = None
+    quantize_linear_attn_k_method: str = None
+    quantize_linear_attn_k_bits: int = None
+    quantize_linear_attn_v_method: str = None
+    quantize_linear_attn_v_bits: int = None
+    quantize_linear_attn_proj_method: str = None
+    quantize_linear_attn_proj_bits: int = None
+    quantize_linear_mlp_up_method: str = None
+    quantize_linear_mlp_up_bits: int = None
+    quantize_linear_mlp_down_method: str = None
+    quantize_linear_mlp_down_bits: int = None
+    quantization_warmup_iters: int = 100
+
+    @classmethod
+    def from_json(cls, filename: str):
+        try:
+            with open(filename, 'r') as json_file:
+                config_dict = json.load(json_file)
+            
+            # Get all field names of the dataclass
+            field_names = {f.name for f in fields(cls)}
+            
+            # Filter the loaded dict to only include valid fields
+            filtered_dict = {k: v for k, v in config_dict.items() if k in field_names}
+            
+            # Create and return a new instance
+            return cls(**filtered_dict)
+        except FileNotFoundError:
+            print(f"Error: File '{filename}' not found.")
+            return None
+        except json.JSONDecodeError:
+            print(f"Error: File '{filename}' is not a valid JSON file.")
+            return None
+        except TypeError as e:
+            print(f"Error: Invalid data in JSON file. {str(e)}")
+            return None
+    
+    def to_json(self, filename: str):
+        """
+        Function to save a GPTConfig object as json to be used for later model creation
+        
+        input: 
+        - fout: string = filename of saved config file
+        
+        """
+        conf_dict = asdict(self)
+
+        with open(filename, 'w') as json_file:
+            json.dump(conf_dict, json_file)
 

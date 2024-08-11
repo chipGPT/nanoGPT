@@ -9,6 +9,8 @@ import shutil
 import sys
 import time
 
+from torchinfo import summary
+
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
@@ -59,6 +61,11 @@ def parse_args():
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
     model_group.add_argument('--gate', default=False, action=argparse.BooleanOptionalAction, help="option for gated attention see https://arxiv.org/abs/2306.12929")
+    model_group.add_argument('--use_moe', default=False,  action=argparse.BooleanOptionalAction, help="option for Mixture of Experts (MoE) architecture")
+    model_group.add_argument('--moe_layer_freq', default=2, type=int, help="set frequency for replacing FFNs with MoE layers")
+    model_group.add_argument('--n_experts', default=8, type=int, help="set number of experts per MoE layer")
+    model_group.add_argument('--moe_top_k', default=2, type=int)
+    model_group.add_argument('--moe_router_scheme', default="softmax", type=str, help="option to set routing scheme for MoE layer, defaults to softmax")
 
     ## MLP Options
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
@@ -81,6 +88,10 @@ def parse_args():
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
     model_group.add_argument("--prmsnorm_pct", default=0.0625, type=float, help="percentage (1 being 100 percent) of first entries used for partial rms" )
     model_group.add_argument("--krmsnorm_num", default=10, type=int, help="max number of first entries for partial rms" )
+    model_group.add_argument("--krmsnorm_quantize_type", type=str, default="none", choices=["int8", "int16", "none"])
+    model_group.add_argument('--krmsnorm_enable_gain', default=True, action=argparse.BooleanOptionalAction, help="include gain in kRMSNorm")
+    model_group.add_argument("--krmsnorm_selection_type", type=str, default="last", choices=["first", "last", "random"])
+    model_group.add_argument("--krmsnorm_recompute_percentage", type=float, default=None, help="percentage needed within the total RMS to not trigger recompute")
 
     # ACTIVATION VARIATIONS
     model_group.add_argument(
@@ -108,22 +119,104 @@ def parse_args():
     )
 
     # LINEAR VARIATIONS
-    model_group.add_argument(
-        "--linear_variant",
-        type=str,
-        default="linear",
-        choices=[
-            "linear",
-            "bitlinear",
-            "bitlinear_1p58",
-            "bitlinear_optimized",
-            "kan",
-        ],
-    )
+    linear_variants = ["linear", "bitlinear", "bitlinear_1p58", "bitlinear_optimized", "kan","quantized_linear"]
+    model_group.add_argument("--linear_variant_attn", type=str, default="linear", choices=linear_variants)
+    model_group.add_argument("--linear_variant_q", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_attn_q in attention (takes precedence over linear_variant_attn)")
+    model_group.add_argument("--linear_variant_k", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_attn_k in attention (takes precedence over linear_variant_attn)")
+    model_group.add_argument("--linear_variant_v", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_attn_v in attention (takes precedence over linear_variant_attn)")
+    model_group.add_argument("--linear_variant_attn_proj", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_proj in attention (takes precedence over linear_variant_attn)")
+    model_group.add_argument("--linear_variant_mlp", type=str, default="linear", choices=linear_variants)
+    model_group.add_argument("--linear_variant_mlp_up", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_fc in mlp (takes precedence over linear_variant_mlp)")
+    model_group.add_argument("--linear_variant_mlp_down", type=str, default=None, choices=linear_variants, help="sets the linear variant for c_proj in mlp (takes precedence over linear_variant_mlp)")
     ## Linear Weight Initialization Options
     model_group.add_argument( "--linear_mean_init", type=float, default=0.0)
     model_group.add_argument( "--linear_std_init", type=float, default=0.02)
 
+    # Quatization
+    
+    ## Quantization Method Options
+    quant_methods = ["symmetric_quant", "affine_quant", "stochastic_quant"]
+
+    ## WTE
+    model_group.add_argument("--quantize_wte", default=None, action=argparse.BooleanOptionalAction, help="Whether the word embedding is quantized")
+    model_group.add_argument("--quantize_wte_method", type=str, default="affine_quant", choices=quant_methods, help="function used for word embedding quantization")
+    model_group.add_argument("--quantize_wte_bits", type=int, default=8, help="number of bits for word embedding quantization")
+
+    ## WPE
+    model_group.add_argument("--quantize_wpe", default=None, action=argparse.BooleanOptionalAction, help="Whether the word position embedding is quantized")
+    model_group.add_argument("--quantize_wpe_method", type=str, default="affine_quant", choices=quant_methods, help="function used for position embedding quantization")
+    model_group.add_argument("--quantize_wpe_bits", type=int, default=8, help="number of bits for position embedding quantization")
+
+    ## Activations
+    model_group.add_argument("--activations_quant_method", type=str, default="affine_quant", choices=quant_methods, help="function used for quantization of activations")
+
+    ### Attention Activations
+    model_group.add_argument("--quantize_attn_act", action=argparse.BooleanOptionalAction, default=False, help="quantize all input/output activations in attn")
+
+    #### Whether to do Attention Activation quantization at the Arrow
+    model_group.add_argument("--quantize_attn_act_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to attention")
+    # TODO add separate Q and K separate fake-quants for this activation
+    model_group.add_argument("--quantize_attn_act_qk_mult_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to qk mult")
+    model_group.add_argument("--quantize_attn_act_softmax_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to softmax")
+    model_group.add_argument("--quantize_attn_act_pv_mult_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to pv mult")
+    # TODO add separate P and V separate fake-quants for this activation
+    model_group.add_argument("--quantize_attn_act_pv_mult_output", action=argparse.BooleanOptionalAction, default=False, help="quantize output activation of pv_mult")
+    model_group.add_argument("--quantize_attn_act_output", action=argparse.BooleanOptionalAction, default=False, help="quantize output activation of attention")
+
+    ### Default Precisions for Attention Activations 
+    model_group.add_argument("--quantize_attn_act_bits", type=int, default=8, help="number of bits for attn quantization")
+       
+    ### Overrides for granular Attention Activatinos
+    model_group.add_argument("--quantize_attn_act_input_bits", type=int, default=None, help="number of bits for attention input quantization")
+    model_group.add_argument("--quantize_attn_act_qk_mult_input_bits", type=int, default=None, help="number of bits for qk mult input quantization")
+    model_group.add_argument("--quantize_attn_act_softmax_input_bits", type=int, default=None, help="number of bits for softmax input quantization")
+    model_group.add_argument("--quantize_attn_act_pv_mult_input_bits", type=int, default=None, help="number of bits for pv mult input quantization")    
+    model_group.add_argument("--quantize_attn_act_pv_mult_output_bits", type=int, default=None, help="number of bits for pv mult output quantization")
+    model_group.add_argument("--quantize_attn_act_output_bits", type=int, default=None, help="number of bits for attention output quantization")
+
+    ### Whether to use MLP Activations
+    model_group.add_argument("--quantize_mlp_act", action=argparse.BooleanOptionalAction, default=False, help="quantize all input/output activations in mlp")
+    model_group.add_argument("--quantize_mlp_act_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to mlp")
+    model_group.add_argument("--quantize_mlp_act_activation_input", action=argparse.BooleanOptionalAction, default=False, help="quantize input activation to activation function")
+    model_group.add_argument("--quantize_mlp_act_activation_output", action=argparse.BooleanOptionalAction, default=False, help="quantize output activation of activation function")
+    model_group.add_argument("--quantize_mlp_act_output", action=argparse.BooleanOptionalAction, default=False, help="quantize output activation of mlp")
+    
+    ### Default Precisions for MLP Activations 
+    model_group.add_argument("--quantize_mlp_act_bits", type=int, default=8, help="number of bits for mlp quantization")
+    
+    ### Overrides for granular MLP Activatinos
+    model_group.add_argument("--quantize_mlp_act_input_bits", type=int, default=None, help="number of bits for mlp input quantization")
+    model_group.add_argument("--quantize_mlp_act_activation_input_bits", type=int, default=None, help="number of bits for activation function input quantization")
+    model_group.add_argument("--quantize_mlp_act_activation_output_bits", type=int, default=None, help="number of bits for activation function output quantization")
+    model_group.add_argument("--quantize_mlp_act_output_bits", type=int, default=None, help="number of bits for mlp output quantization")
+    
+    ## Linear Attn Weight Quantization Precision and Method 
+    
+    ### Default methods and precisions
+    model_group.add_argument("--quantize_linear_method", type=str, default="affine_quant", choices=quant_methods, help="function used for linear quantization")
+    model_group.add_argument("--quantize_linear_bits", type=int, default=8, help="number of bits for linear quantization")
+   
+    #### Overrides for granular Methods and Precisions
+    model_group.add_argument("--quantize_linear_attn_q_method", type=str, default=None, choices=quant_methods, help="function used for c_attn_q quantization")
+    model_group.add_argument("--quantize_linear_attn_q_bits", type=int, default=None, help="number of bits for c_attn_q quantization")
+    
+    model_group.add_argument("--quantize_linear_attn_k_method", type=str, default=None, choices=quant_methods, help="function used for c_attn_k quantization")
+    model_group.add_argument("--quantize_linear_attn_k_bits", type=int, default=None, help="number of bits for c_attn_k quantization")
+    
+    model_group.add_argument("--quantize_linear_attn_v_method", type=str, default=None, choices=quant_methods, help="function used for c_attn_v quantization")
+    model_group.add_argument("--quantize_linear_attn_v_bits", type=int, default=None, help="number of bits for c_attn_v quantization")
+    
+    model_group.add_argument("--quantize_linear_attn_proj_method", type=str, default=None, choices=quant_methods, help="function used for c_proj in attention quantization")
+    model_group.add_argument("--quantize_linear_attn_proj_bits", type=int, default=None, help="number of bits for c_proj in attention quantization")
+
+    #### Overrides for Linear MLP Weight Quantization Precision and Method 
+    model_group.add_argument("--quantize_linear_mlp_up_method", type=str, default=None, choices=quant_methods, help="function used for mlp_up quantization")
+    model_group.add_argument("--quantize_linear_mlp_up_bits", type=int, default=None, help="number of bits for mlp_up quantization")
+    model_group.add_argument("--quantize_linear_mlp_down_method", type=str, default=None, choices=quant_methods, help="function used for mlp_down quantization")
+    model_group.add_argument("--quantize_linear_mlp_down_bits", type=int, default=None, help="number of bits for mlp_down quantization")
+    
+    ## Quantized Linear Warmup Iterations -- how many to first use regular linear, before switching to quantized
+    model_group.add_argument("--quantization_warmup_iters", type=int, default=100)
 
     # POSITIONAL EMBEDDING VARIATIONS
     model_group.add_argument('--use_rotary_embeddings', default=False, action=argparse.BooleanOptionalAction)
@@ -267,6 +360,10 @@ def parse_args():
     logging_group.add_argument('--wandb_project', type=str, default='out-test')
     logging_group.add_argument('--wandb_run_name', type=str, default='logs-test')
 
+    ### Create model from json config file & save config file to json
+    logging_group.add_argument('--load_config_json', type=str, help="Option to load model parameters from existing json file")
+    logging_group.add_argument('--save_config_json', type=str, help="Option to save model parameters as new config json file")
+
     # Visualization args
     logging_group.add_argument('--statistic', choices=[
     'input_mean', 'input_median', 'input_stdev', 'input_max', 'input_min',
@@ -279,7 +376,24 @@ def parse_args():
     logging_group.add_argument('--box_plot_statistic', choices=['input', 'output', 'all'],
      default='', help='Select input or output statistic to display in boxplot')
 
+    # Model Parameter Distribution
+    logging_group.add_argument('--print_block_summary', default=False, action=argparse.BooleanOptionalAction)
+
     args = parser.parse_args()
+
+    if args.load_config_json is not None:
+        with open(args.load_config_json, 'r') as config_file:
+            config = json.load(config_file)
+
+        # Update the args namespace with values from the JSON file
+        for key, value in config.items():
+            setattr(args, key, value)
+
+    # Save all params to provided json if flag is present
+    if args.save_config_json is not None:
+        with open(args.save_config_json, 'w') as json_file:
+            json.dump(vars(args), json_file)
+
     return args, model_group, training_group, logging_group
 
 def initialize_statistics(num_layers, num_heads):
@@ -316,7 +430,7 @@ class Trainer:
     def __init__(self, args, model_group, training_group, logging_group):
         self.args = args
         self.model_group = model_group
-        self.training_group = training_group 
+        self.training_group = training_group
         self.logging_group = logging_group
 
         # typically make the decay iters equal to max_iters
@@ -429,6 +543,14 @@ class Trainer:
             self.model_args['block_size'] = self.args.block_size
 
         self.model.to(self.device)
+
+        # Print the model summary
+        summary(self.model)
+
+        if self.args.print_block_summary:
+            for idx, block in enumerate(self.model.transformer.h):
+                print(f"Summary for Block {idx + 1}:")
+                summary(block)
 
         # Optimizer
         self.scaler = torch.cuda.amp.GradScaler(enabled=(self.args.dtype == 'float16'))
@@ -851,6 +973,18 @@ class Trainer:
                 print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
                 self.log_metrics(losses, lr, running_mfu, self.iter_num)
 
+                if math.isnan(losses["val"]):
+                    checkpoint = {
+                        'model': self.raw_model.state_dict(),
+                        'optimizer': self.optimizer.state_dict(),
+                        'model_args': self.model_args,
+                        'iter_num': self.iter_num,
+                        'best_val_loss': self.best_val_loss,
+                        'nan_iter_num' : 0,
+                        'nan' : True,
+                        'config': vars(self.args),
+                    }
+                    torch.save(checkpoint, os.path.join(self.args.out_dir, 'ckpt.pt'))
                 if losses['val'] < self.best_val_loss or self.args.always_save_checkpoint:
                     if losses['val'] < self.best_val_loss:
                         self.iter_num_best_val_loss = self.iter_num
