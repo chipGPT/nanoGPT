@@ -143,6 +143,8 @@ class CausalSelfAttention(nn.Module):
         self.window_size = config.window_size
         self.n_embd = config.n_embd
         self.gate = config.gate
+        self.sharing_factor = config.sharing_factor
+        self.n_layer = config.n_layer
         self.use_fire_embeddings = None
         if config.use_fire_embeddings:
             self.use_fire_embeddings = config.use_fire_embeddings
@@ -212,52 +214,58 @@ class CausalSelfAttention(nn.Module):
             x = _fake_quantize(x, self.quantization_attn_dict["quantize_attn_act_input_bits"], self.quantization_attn_dict["activations_quant_method"])
 
         q = self.c_attn_q(x)
-        ########CLA related modification#############
+        ########CLA related modification########
         assert self.sharing_factor != 0
         assert self.sharing_factor <= self.n_layer
         if stored_k is not None and stored_v is not None and (block_count % self.sharing_factor) != 0:
-            # print("using stored k and v")
-            # print("block count: ", block_count)
             k = stored_k
             v = stored_v
+            # TODO: Bring the gating into it's own method to prevent code duplication
+            if self.gate and not self.use_cl_shared_gating:
+                if self.n_kv_group == self.n_head:
+                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    gate_ = torch.sigmoid(Gating(x))
+                    q = q * gate_
+                    k = k * gate_
+                    v = v * gate_
+                else:
+                    # TODO: Test more methods to merge Attention Gates with GQA
+                    # TODO: Evaluate each method's ability to even out parameter sizes
+                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                    gate_qx = Gating_q(x)
+                    gate_q = torch.sigmoid(gate_qx)
+                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
+                    q = q * gate_q
+                    k = k * gate_kv
+                    v = v * gate_kv
         else:
-            # print("not using stored k and v")
-            #x shape [5, 3, 128]
-            # print("block count: ", block_count)
-            # print("x shape: ", x.shape)
-            # print(x)
-            #
             k = self.c_attn_k(x)
             v = self.c_attn_v(x)
+            if self.rotary_emb_q is not None:
+                q = self.rotary_emb_q(q)
+                k = self.rotary_emb_k(k)
 
-        if self.rotary_emb_q is not None:
-            q = self.rotary_emb_q(q)
-            k = self.rotary_emb_k(k)
-
-        if self.window_size is not None:
-            window_mask = torch.ones((1, 1, T, T), device=x.device)
-            window_mask = torch.triu(window_mask, diagonal=-self.window_size)
-            window_mask = self.bias[:,:,:T,:T] * window_mask
-
-        if self.gate:
-            if self.n_kv_group == self.n_head:
-                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                gate_ = torch.sigmoid(Gating(x))
-                q = q * gate_
-                k = k * gate_
-                v = v * gate_
-            else:
-                # TODO: Test more methods to merge Attention Gates with GQA
-                # TODO: Evaluate each method's ability to even out parameter sizes
-                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                gate_qx = Gating_q(x)
-                gate_q = torch.sigmoid(gate_qx)
-                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                q = q * gate_q
-                k = k * gate_kv
-                v = v * gate_kv
-
+            if self.gate:
+                if self.n_kv_group == self.n_head:
+                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    gate_ = torch.sigmoid(Gating(x))
+                    q = q * gate_
+                    k = k * gate_
+                    v = v * gate_
+                else:
+                    # TODO: Test more methods to merge Attention Gates with GQA
+                    # TODO: Evaluate each method's ability to even out parameter sizes
+                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                    gate_qx = Gating_q(x)
+                    gate_q = torch.sigmoid(gate_qx)
+                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
+                    q = q * gate_q
+                    k = k * gate_kv
+                    v = v * gate_kv
+        k_store = k
+        v_store = v
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
         k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
         v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
@@ -326,7 +334,7 @@ class CausalSelfAttention(nn.Module):
         if self.quantization_attn_dict["quantize_attn_act_output"]:
             y = _fake_quantize(y, self.quantization_attn_dict["quantize_attn_act_output_bits"], self.quantization_attn_dict["activations_quant_method"])
 
-        return y
+        return y, k_store, v_store
 
 
 class MLP(nn.Module):
