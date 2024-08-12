@@ -45,9 +45,6 @@ def create_shared_param_group(layer_type, config, experts=None):
     elif layer_type == "attn":
         shared_size = config.shared_attn_size
         shared_sym = config.shared_attn_sym
-    elif layer_type == "moe":
-        shared_size = config.shared_moe_size
-        shared_sym = config.shared_moe_sym
     else:
         sys.exit(f"{layer_type} not supported, exiting")
 
