@@ -16,7 +16,7 @@ class GPTConfig:
     use_moe: bool = False
     moe_layer_freq: int = 2
     n_experts: int = 8
-    moe_top_k: int = 2
+    moe_top_k: int = 1
     moe_router_scheme: str = "softmax"
     share_experts: bool = False
 

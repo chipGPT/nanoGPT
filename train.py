@@ -47,6 +47,7 @@ def parse_args():
     training_group.add_argument('--dataset', default='shakespeare_char', type=str)
     training_group.add_argument('--batch_size', default=64, type=int)
     training_group.add_argument("--seed", default=1337, type=int)
+    training_group.add_argument("--freeze_experts", default=False, action=argparse.BooleanOptionalAction)
 
     # Model args
     model_group.add_argument('--block_size', default=256, type=int)
@@ -457,6 +458,15 @@ class Trainer:
             self.model.load_state_dict(state_dict)
             self.iter_num = 0
             self.best_val_loss = checkpoint['best_val_loss']
+            if self.args.freeze_experts:
+                # need to freeze the experts in MoE layers if init_from a prev_run
+                for _, m in enumerate(self.model.modules()):
+                    if type(m) == type(self.model):
+                        for block in m.transformer.h:
+                            if "MoELayer" in str(type(block.mlp)):
+                                for expert in block.mlp.experts:
+                                    for param in expert.parameters():
+                                        param.requires_grad = False
 
         if self.args.block_size < self.model.config.block_size:
             self.model.crop_block_size(self.args.block_size)

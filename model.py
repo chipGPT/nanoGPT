@@ -410,6 +410,9 @@ class GPT(nn.Module):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
+        # report model memory footprint
+        print(f"memory footprint of model: {self.get_mb_size()}Mb")
+
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
@@ -421,6 +424,22 @@ class GPT(nn.Module):
         if non_embedding and self.config.use_abs_pos_embeddings:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
+    
+    def get_mb_size(self):
+        """
+        Return the size of the model in Mb by summing params in the model 
+        and multiplying by the size of the type
+        """
+        model_size = 0
+        # TODO: this doesn't account for sharing experts/mlp layers
+        for param in self.parameters():
+            if param.data.is_floating_point():
+                model_size += param.numel() * torch.finfo(param.data.dtype).bits
+            else:
+                model_size += param.numel() * torch.iinfo(param.data.dtype).bits
+        model_size = round((model_size / 8e6), 2)
+        return model_size
+
 
     def update_block_size(self, new_block_size):
         # Function to increase block size dynamically
