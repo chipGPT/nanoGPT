@@ -8,6 +8,10 @@ from rich import print
 from rich.console import Console
 from rich.table import Table
 
+from absl import app
+from absl import flags
+from absl import logging
+
 import torch
 from vizier.service import clients, pyvizier as vz
 
@@ -42,7 +46,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--vizier_iterations", type=int, default=20, help="Number of Vizier iterations."
+        "--vizier_iterations", type=int, default=2, help="Number of Vizier iterations."
     )
 
     parser.add_argument(
@@ -142,22 +146,24 @@ def run_command(config, config_basename, output_dir, add_names):
 def run_experiment_with_vizier(
     config, config_basename, output_dir, add_names, vizier_algorithm, vizier_iterations
 ):
-    search_space = vz.SearchSpace()
+    #search_space = vz.SearchSpace()
+    study_config = vz.StudyConfig()  # Search space, metrics, and algorithm.
+    root = study_config.search_space.root
     for k, v in config.items():
         if isinstance(v, list):
             param_type = type(v[0]).__name__.upper()
             if param_type == "INT":
-                search_space.root.add_int_param(
+                root.add_int_param(
                     name=k, min_value=min(map(int, v)), max_value=max(map(int, v))
                 )
             elif param_type == "FLOAT":
-                search_space.root.add_float_param(
+                root.add_float_param(
                     name=k, min_value=min(map(float, v)), max_value=max(map(float, v))
                 )
             elif param_type == "STR":
-                search_space.root.add_categorical_param(name=k, feasible_values=v)
+                root.add_categorical_param(name=k, feasible_values=v)
             elif param_type == "BOOL":
-                search_space.root.add_categorical_param(
+                root.add_categorical_param(
                     name=k, feasible_values=[str(val) for val in v]
                 )
         elif isinstance(v, dict) and "range" in v:
@@ -165,14 +171,14 @@ def run_experiment_with_vizier(
             start, end, step = range_def["start"], range_def["end"], range_def["step"]
             param_type = type(start).__name__.upper()
             if param_type == "INT":
-                search_space.root.add_int_param(
+                root.add_int_param(
                     name=k,
                     min_value=start,
                     max_value=end,
                     scale_type=vz.ScaleType.LINEAR,
                 )
             elif param_type == "FLOAT":
-                search_space.root.add_float_param(
+                root.add_float_param(
                     name=k,
                     min_value=start,
                     max_value=end,
@@ -181,26 +187,32 @@ def run_experiment_with_vizier(
         else:
             param_type = type(v).__name__.upper()
             if param_type == "INT":
-                search_space.root.add_int_param(name=k, min_value=v, max_value=v)
+                root.add_int_param(name=k, min_value=v, max_value=v)
             elif param_type == "FLOAT":
-                search_space.root.add_float_param(name=k, min_value=v, max_value=v)
+                root.add_float_param(name=k, min_value=v, max_value=v)
             elif param_type == "STR":
-                search_space.root.add_categorical_param(name=k, feasible_values=[v])
+                root.add_categorical_param(name=k, feasible_values=[v])
             elif param_type == "BOOL":
-                search_space.root.add_categorical_param(
+                root.add_categorical_param(
                     name=k, feasible_values=[bool(v)]
                 )
 
-    print("search_space", search_space)
-    study_config = vz.StudyConfig(
-        search_space=search_space,
-        metric_information=[
-            vz.MetricInformation(name="loss", goal=vz.ObjectiveMetricGoal.MINIMIZE)
-        ],
-    )
     study_config.algorithm = vizier_algorithm
+    study_config.metric_information.append(
+      vz.MetricInformation(
+          name='loss',
+          goal=vz.ObjectiveMetricGoal.MAXIMIZE,
+          min_value=0.0,
+          max_value=1.0,
+      )
+  )
+    study_config.metric_information.append(
+        vz.MetricInformation(
+            name='test', goal=vz.ObjectiveMetricGoal.MINIMIZE
+        )
+    )
     study_client = clients.Study.from_study_config(
-        study_config, owner="owner", study_id="example_study_id"
+        study_config, owner="owner1", study_id="example_study_id"
     )
 
     for i in range(vizier_iterations):
@@ -208,17 +220,31 @@ def run_experiment_with_vizier(
         suggestions = study_client.suggest(count=1)
         for suggestion in suggestions:
             params = suggestion.parameters
+            print("Suggested parameters:")
+            print(params)
             config = run_command(params, config_basename, output_dir, add_names)
             loss = get_best_val_loss(config["out_dir"])
-            suggestion.complete(vz.Measurement(metrics={"loss": loss}))
+            test = loss - 1
+            #test = Hardware_PPA_Run()
+            measurement = evaluate_trial(loss, test, suggestion)
+            suggestion.complete(measurement)
+            #suggestion.complete(vz.Measurement(metrics={"loss": loss}))
 
     optimal_trials = study_client.optimal_trials()
     for trial in optimal_trials:
         best_trial = trial.materialize()
         print(
-            f"Best trial: {best_trial.parameters}, Loss: {best_trial.final_measurement.metrics['loss']}"
+            f"Best trial: {best_trial.parameters}, Loss: {best_trial.final_measurement.metrics['loss']}, test: {best_trial.final_measurement.metrics['test']}"
         )
 
+def evaluate_trial(loss, PPA, trial):
+  """Dummy evaluator used as an example."""
+  #num_heads = trial.parameters.get_value('n_head')
+  #num_layers = trial.parameters.get_value('n_layer')
+  m = vz.Measurement()
+  m.metrics = {'loss': loss}
+  m.metrics['test'] = PPA
+  return m
 
 def main():
     args = parse_args()
@@ -226,7 +252,6 @@ def main():
 
     with open(args.config, "r") as file:
         original_configurations = json.load(file)
-
     for config in original_configurations:
         run_experiment_with_vizier(
             config,
