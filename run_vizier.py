@@ -46,7 +46,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--vizier_iterations", type=int, default=2, help="Number of Vizier iterations."
+        "--vizier_iterations", type=int, default=20, help="Number of Vizier iterations."
     )
 
     parser.add_argument(
@@ -69,6 +69,32 @@ def parse_args():
         help="Choose the Vizier algorithm to use.",
     )
 
+    parser.add_argument(
+    "--parameters",
+    type=str,
+    nargs="+",
+    help="List of parameters to optimize. Example: --parameters n_layer n_head block_size",
+)
+    parser.add_argument(
+        "--ranges",
+        type=str,
+        nargs="+",
+        help="List of ranges for each parameter in the same order. Example: --ranges '[6,24]' '[4,16]' '[512,2048]'",
+    )
+
+    parser.add_argument(
+        "--scaling_types",
+        type=str,
+        nargs="+",
+        help="List of ranges for each parameter in the same order. Example: --scaling_types linear linar log",
+    )
+
+    parser.add_argument(
+        "--data_types",
+        type=str,
+        nargs="+",
+        help="List of ranges for each parameter in the same order. Example: --data_types int int folat",
+    )
     return parser.parse_args()
 
 
@@ -144,7 +170,7 @@ def run_command(config, config_basename, output_dir, add_names):
 
 
 def run_experiment_with_vizier(
-    config, config_basename, output_dir, add_names, vizier_algorithm, vizier_iterations
+    config, config_basename, output_dir, add_names, vizier_algorithm, vizier_iterations, parameters, ranges, scaling_types, data_types
 ):
     #search_space = vz.SearchSpace()
     study_config = vz.StudyConfig()  # Search space, metrics, and algorithm.
@@ -154,14 +180,18 @@ def run_experiment_with_vizier(
             param_type = type(v[0]).__name__.upper()
             if param_type == "INT":
                 root.add_int_param(
-                    name=k, min_value=min(map(int, v)), max_value=max(map(int, v))
+                    name=k, min_value=min(map(int, v)), max_value=max(map(int, v)), scale_type=vz.ScaleType.LOG
                 )
             elif param_type == "FLOAT":
                 root.add_float_param(
-                    name=k, min_value=min(map(float, v)), max_value=max(map(float, v))
+                    name=k, min_value=min(map(float, v)), max_value=max(map(float, v)), scale_type=vz.ScaleType.LOG
                 )
             elif param_type == "STR":
-                root.add_categorical_param(name=k, feasible_values=v)
+                if k in parameters:
+                    range = ranges[parameters.index(k)]
+                    min, max = range[0], range[1]
+                    scaling_type = scaling_types[parameters.index(k)]
+                    root.add_int_param(name = k, min_value = min, max_value = max, scale_type = vz.ScaleType[scaling_type])
             elif param_type == "BOOL":
                 root.add_categorical_param(
                     name=k, feasible_values=[str(val) for val in v]
@@ -224,8 +254,7 @@ def run_experiment_with_vizier(
             print(params)
             config = run_command(params, config_basename, output_dir, add_names)
             loss = get_best_val_loss(config["out_dir"])
-            test = loss - 1
-            #test = Hardware_PPA_Run()
+            test = Hardware_Efficiency_Run(params)
             measurement = evaluate_trial(loss, test, suggestion)
             suggestion.complete(measurement)
             #suggestion.complete(vz.Measurement(metrics={"loss": loss}))
@@ -237,14 +266,36 @@ def run_experiment_with_vizier(
             f"Best trial: {best_trial.parameters}, Loss: {best_trial.final_measurement.metrics['loss']}, test: {best_trial.final_measurement.metrics['test']}"
         )
 
-def evaluate_trial(loss, PPA, trial):
-  """Dummy evaluator used as an example."""
-  #num_heads = trial.parameters.get_value('n_head')
-  #num_layers = trial.parameters.get_value('n_layer')
+def evaluate_trial(loss, PPA):
   m = vz.Measurement()
   m.metrics = {'loss': loss}
   m.metrics['test'] = PPA
   return m
+
+def Hardware_Efficiency_Run(config):
+    #Simplified hardware efficiency computation only for testing
+    for k, v in config.items():
+        if k == "n_head":
+            num_heads = float(v[0])
+            print(num_heads)
+        elif k == "n_layer":
+            num_layers = float(v[0])
+            print(num_layers)
+        elif k == "shared_mlp_size":
+            shared_mlp_size = float(v)
+            print(shared_mlp_size)
+        elif k == "shared_attn_size":
+            shared_attn_size = float(v)
+            print(shared_attn_size)
+        elif k == "shared_mlp_sym":
+            shared_mlp_sym = 1/2
+            print(shared_mlp_sym)
+        elif k == "shared_attn_sym":
+            shared_attn_sym = 1/2
+            print(shared_attn_sym)
+    hardware_efficiency = num_heads * num_layers * shared_mlp_sym * shared_attn_sym /(shared_mlp_size * shared_attn_size)
+    print()
+    return hardware_efficiency
 
 def main():
     args = parse_args()
@@ -260,6 +311,10 @@ def main():
             args.add_names,
             args.vizier_algorithm,
             args.vizier_iterations,
+            args.parameters,
+            args.ranges,
+            args.scaling_types,
+            args.data_types,
         )
 
 
