@@ -512,6 +512,43 @@ class Squareplus(nn.Module):
 
         return result
 
+class SoftReluMax(nn.Module):
+    """ SoftReluMax using ReLU in forward pass and SoftPlus in backward pass """
+    def __init__(self, config, dim=-1):
+        super().__init__()
+        self.dim = dim
+        self.softplus = nn.Softplus()
+        self.relu = nn.ReLU()
+        self.divisor = config.softrelumax_divisor
+        self.div_by_seq_len = config.div_by_seq_len
+
+    def forward(self, x):
+        return _SoftReluMaxFunction.apply(x, self.divisor, self.dim, self.div_by_seq_len, self.softplus, self.relu)
+
+class _SoftReluMaxFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, divisor, dim, div_by_seq_len, softplus, relu):
+        ctx.save_for_backward(x)
+        ctx.divisor = divisor
+        ctx.dim = dim
+        ctx.div_by_seq_len = div_by_seq_len
+        ctx.softplus = softplus
+
+        result = relu(x) / divisor
+        if div_by_seq_len:
+            seq_len = x.shape[dim]
+            result = result / seq_len
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        backward_output = ctx.softplus(x) / ctx.divisor
+        if ctx.div_by_seq_len:
+            seq_len = x.shape[ctx.dim]
+            backward_output = backward_output / seq_len
+        return grad_output * backward_output, None, None, None, None, None
+
 # Note: we use the built in library for regular softmax
 softmax_dictionary = {
     "consmax": ConSmax,
@@ -527,4 +564,5 @@ softmax_dictionary = {
     "relumax": ReLUMax,
     "softplus": Softplus,
     "squareplus": Squareplus,
+    "softrelumax": SoftReluMax,
 }

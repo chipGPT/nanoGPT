@@ -102,6 +102,9 @@ class GPTConfig:
     ## Squareplus options
     squareplus_divisor: float = 256.0
 
+    ## Squareplus options
+    softrelumax_divisor: float = 256.0
+
     # Positional Embeddings Variations
     use_abs_pos_embeddings: bool = True # Note: one can use this AND rotary embeddings
     use_fire_embeddings: bool = False
@@ -124,7 +127,7 @@ class GPTConfig:
     fire_outermost_sigma: bool = False
 
     # Structuring Options, remember to compile the model
-    use_post_ln: bool = True
+    use_post_ln: bool = False
 
     # Layernorm Alternatives and Options
     norm_variant_attn: str = "rmsnorm"

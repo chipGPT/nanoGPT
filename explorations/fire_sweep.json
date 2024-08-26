@@ -1,7 +1,6 @@
 [
     {
       "max_iters": ["3500"],
-      "patience": ["100"],
       "n_layer": ["6"],
       "n_head": ["6"],
       "n_embd": ["384"],
@@ -12,19 +11,16 @@
       "save_nan_checkpoint": [true],
       "use_rotary_embeddings": [false],
       "use_abs_pos_embeddings": [false],
-      "softmax_variant_attn": ["polymax", "softplus", "softmax"],
-      "n_kv_group": ["6", "2"],
+      "softmax_variant_attn": ["softplus", "softmax", "relumax", "softrelumax", "polymax"],
       "dtype": ["bfloat16", "float16"],
       "use_fire_embeddings": [true],
       "shared_fire_embeddings": [true, false],
-      "use_post_ln": [false, true],
-      "seed": {
-        "range": {
-          "start": 1,
-          "end": 1,
-          "step": 1
-        }
-      }
+      "fire_log_bias": ["0.5","1.0", "2.0"],
+      "fire_num_hidden_layer": ["1", "2"],
+      "fire_mlp_width": ["16", "32", "64"],
+      "fire_init_c": ["0.5", "0.1", "0.2"],
+      "fire_init_L": ["256", "512", "1024"],
+      "fire_outermost_sigma": [false, true]
     }
-  ]
+]
 

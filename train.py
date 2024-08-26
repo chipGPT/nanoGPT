@@ -255,7 +255,7 @@ def parse_args():
     model_group.add_argument( "--fire_mlp_width", type=int, default=32, help="mlp_width: one hidden dimension of linear layers in mlp in FIRE")
     model_group.add_argument( "--fire_init_c", type=float, default=0.1, help="init_c: initial value of log transformation parameter c in FIRE")
     model_group.add_argument( "--fire_init_L", type=float, default=512.0, help="init_L: initial value of threshold L in FIRE (fixed values without L_multiplier)")
-    model_group.add_argument( "--fire_outermost_sigma", type=bool, default=False, help="whether or not adding outermost sigma in mlp in FIRE")
+    model_group.add_argument( "--fire_outermost_sigma", default=False, action=argparse.BooleanOptionalAction, help="whether or not adding outermost sigma in mlp in FIRE")
 
 
     # SOFTMAX VARIATIONS
@@ -275,6 +275,7 @@ def parse_args():
         "softmax",
         "softplus",
         "squareplus",
+        "softrelumax",
         "exppolymax",
         ]
 
@@ -329,9 +330,11 @@ def parse_args():
     model_group.add_argument('--softermax_use_xmax', default=True, action=argparse.BooleanOptionalAction)
 
     ### SoftPlus Options
-    model_group.add_argument('--softplus_divisor', type=float,default=100.0)
+    model_group.add_argument('--softplus_divisor', type=float,default=256.0)
     ### SquarePlus Options
-    model_group.add_argument('--squareplus_divisor', type=float,default=100.0)
+    model_group.add_argument('--squareplus_divisor', type=float,default=256.0)
+    ### SoftReluMax Options
+    model_group.add_argument('--softrelumax_divisor', type=float,default=256.0)
 
     ### Sequence Length Division https://arxiv.org/abs/2309.
     model_group.add_argument('--div_by_seq_len', default=False, action=argparse.BooleanOptionalAction)
