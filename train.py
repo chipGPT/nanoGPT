@@ -71,7 +71,6 @@ def parse_args():
     model_group.add_argument('--block_size', default=256, type=int)
     model_group.add_argument('--n_layer', default=6, type=int)
     model_group.add_argument('--n_head', default=6, type=int)
-    model_group.add_argument('--n_kv_group', default=6, type=int)
     model_group.add_argument('--sharing_factor', default=1, type=int)
     model_group.add_argument('--n_kv_group', default=None, type=int)
     model_group.add_argument('--n_embd', default=384, type=int)
