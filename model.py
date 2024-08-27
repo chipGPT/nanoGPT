@@ -155,6 +155,8 @@ class CausalSelfAttention(nn.Module):
         self.window_size = config.window_size
         self.n_embd = config.n_embd
         self.gate = config.gate
+        self.sharing_factor = config.sharing_factor
+        self.n_layer = config.n_layer
         self.use_fire_embeddings = None
         if config.use_fire_embeddings:
             self.use_fire_embeddings = config.use_fire_embeddings
@@ -212,7 +214,7 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
 
-    def forward(self, x):
+    def forward(self, x, stored_k=None, stored_v=None, block_count=0, kv_cache_table=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         if self.quantization_attn_dict["quantize_attn_act_input"]:
@@ -337,7 +339,7 @@ class CausalSelfAttention(nn.Module):
             quant_method = self.quantization_attn_dict["activations_quant_method"]
             y = fake_quantize_act(self, "attn_act_output", y, num_bits, quant_method)
 
-        return y
+        return y, k_store, v_store
 
 
 class MLP(nn.Module):
@@ -466,23 +468,27 @@ class Block(nn.Module):
         else:
             self.mlp = mlp
 
-    def forward(self, x):
-        def custom_forward(*inputs):
+    def forward(self, x, stored_k=None, stored_v=None, block_count=0):
+        def custom_forward(*inputs, stored_k=None, stored_v=None, block_count=0):
             x = inputs[0]
             if self.use_post_ln:
                 if self.use_parallel_mlp:
-                    x = self.ln_1(x + self.attn(x) + self.mlp(x))
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = self.ln_1(x + attn_output + self.mlp(x))
                 else:
-                    x = self.ln_1(x + self.attn(x))
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = self.ln_1(x + attn_output)
                     x = self.ln_2(x + self.mlp(x))
             else:
                 if self.use_parallel_mlp:
                     ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1) + self.mlp(ln_1)
+                    attn_output, new_k, new_v = self.attn(x, stored_k, stored_v, block_count)
+                    x = x +attn_output + self.mlp(ln_1)
                 else:
-                    x = x + self.attn(self.ln_1(x))
+                    attn_output, new_k, new_v = self.attn(self.ln_1(x), stored_k, stored_v, block_count)
+                    x = x + attn_output
                     x = x + self.mlp(self.ln_2(x))
-            return x
+            return x, new_k, new_v
 
         if self.use_gradient_checkpointing and x.requires_grad:
             return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
@@ -610,12 +616,17 @@ class GPT(nn.Module):
           x = self.transformer.drop(tok_emb)
 
         x.requires_grad_(True)  # Ensure requires_grad is True
-
+        k_cache = None
+        v_cache = None
+        block_count = 0
         for block in self.transformer.h:
             if self.config.use_gradient_checkpointing:
                 x = checkpoint.checkpoint(block, x, use_reentrant=False)
             else:
-                x = block(x)
+                x, k, v = block(x, stored_k = k_cache, stored_v = v_cache, block_count = block_count)
+                k_cache = k
+                v_cache = v
+                block_count += 1
 
         x = self.transformer.ln_f(x)
 
