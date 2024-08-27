@@ -25,11 +25,11 @@ import torch.utils.checkpoint as checkpoint
 # Variations
 from variations.softmax_variations import softmax_dictionary
 from variations.norm_variations import norm_dictionary
-from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, ShortRope, SymmetricalOverlapAngularPositions, FIRE
+from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
-from quantization.quantize import _fake_quantize
+from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
 
 def create_shared_param_group(layer_type, config):
 
@@ -52,7 +52,7 @@ def create_shared_param_group(layer_type, config):
     # if attn layer check if using shared fire embeddings
     fire_pos_enc = None
     if layer_type == "attn" and config.shared_fire_embeddings:
-        fire_pos_enc = FIRE(num_heads=config.n_head)
+        fire_pos_enc = FIRE(config, num_heads=config.n_head)
 
     for i in range (config.n_layer):
 
@@ -96,10 +96,20 @@ def set_variant(variant, default_variant):
         return default_variant
     return variant
 
+def create_activation_buffers(obj, arg):
+    arg_str = arg.split("quantize_")[1]
+    obj.register_buffer(arg_str, None)
+    obj.register_buffer(f"{arg_str}_scale", None)
+    obj.register_buffer(f"{arg_str}_zero_point", None)
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
+        if (config.n_kv_group == None):
+            config.n_kv_group = config.n_head
+        else:
+            assert config.n_embd % config.n_kv_group == 0
+        
 
         self.quantization_attn_dict = {}
         self.quantization_attn_dict["activations_quant_method"] = config.activations_quant_method
@@ -109,6 +119,8 @@ class CausalSelfAttention(nn.Module):
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act_bits)
             elif arg.startswith("quantize_") and "attn_act" in arg:
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act)
+                if config.store_activations and arg != "quantize_attn_act" and self.quantization_attn_dict[arg]:
+                    create_activation_buffers(self, arg)
             # Set each attention Linear precision and method
             elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_bits"):
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_bits)
@@ -152,26 +164,21 @@ class CausalSelfAttention(nn.Module):
                 self.fire_pos_enc = fire_pos_enc
                 print("shared fire")
             else:
-                self.fire_pos_enc = FIRE(num_heads=config.n_head)
+                self.fire_pos_enc = FIRE(config, num_heads=config.n_head)
                 print("indiv fire")
 
         # Rotary Positional Embeddings
         self.rotary_emb_q = None
         self.rotary_emb_k = None
         if config.use_rotary_embeddings:
-            # TODO update variant name after completing rope and shortrope updates
-            # TODO Add shortrope to symmetrical rope
-            if config.rope_variant == "rope":
+            # Note: size is the size of the head dimension
+            if config.rope_variant == "soap":
                 self.sym_rot_num_angles = config.sym_rot_num_angles
-                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd, num_angles=self.sym_rot_num_angles)
-                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=self.kv_dim, num_angles=self.sym_rot_num_angles)
-            # TODO update rope and shortrope to accomodate new GQA additions
-            # if config.rope_variant == "rope":
-            #     self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd)
-            #     self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // config.n_head * config.n_kv_group)
-            # if config.rope_variant == "shortrope":
-            #     self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd)
-            #     self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // config.n_head * config.n_kv_group)
+                self.rotary_emb_q = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
+                self.rotary_emb_k = SymmetricalOverlapAngularPositions(config, size=config.n_embd // self.n_head, num_angles=self.sym_rot_num_angles)
+            elif config.rope_variant == "rope":
+                self.rotary_emb_q = RotaryEmbedding(config, size=config.n_embd // self.n_head)
+                self.rotary_emb_k = RotaryEmbedding(config, size=config.n_embd // self.n_head)
 
         # Softmax Variant Selection
         self.softmax_variant_attn = config.softmax_variant_attn
@@ -211,64 +218,46 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         if self.quantization_attn_dict["quantize_attn_act_input"]:
-            x = _fake_quantize(x, self.quantization_attn_dict["quantize_attn_act_input_bits"], self.quantization_attn_dict["activations_quant_method"])
+            num_bits = self.quantization_attn_dict["quantize_attn_act_input_bits"]
+            quant_method = self.quantization_attn_dict["activations_quant_method"]
+            x = fake_quantize_act(self, "attn_act_input", x, num_bits, quant_method)
 
         q = self.c_attn_q(x)
-        ########CLA related modification########
-        assert self.sharing_factor != 0
-        assert self.sharing_factor <= self.n_layer
-        if stored_k is not None and stored_v is not None and (block_count % self.sharing_factor) != 0:
-            k = stored_k
-            v = stored_v
-            # TODO: Bring the gating into it's own method to prevent code duplication
-            if self.gate and not self.use_cl_shared_gating:
-                if self.n_kv_group == self.n_head:
-                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    gate_ = torch.sigmoid(Gating(x))
-                    q = q * gate_
-                    k = k * gate_
-                    v = v * gate_
-                else:
-                    # TODO: Test more methods to merge Attention Gates with GQA
-                    # TODO: Evaluate each method's ability to even out parameter sizes
-                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                    gate_qx = Gating_q(x)
-                    gate_q = torch.sigmoid(gate_qx)
-                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                    q = q * gate_q
-                    k = k * gate_kv
-                    v = v * gate_kv
-        else:
-            k = self.c_attn_k(x)
-            v = self.c_attn_v(x)
-            if self.rotary_emb_q is not None:
-                q = self.rotary_emb_q(q)
-                k = self.rotary_emb_k(k)
+        k = self.c_attn_k(x)
+        v = self.c_attn_v(x)
 
-            if self.gate:
-                if self.n_kv_group == self.n_head:
-                    Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    gate_ = torch.sigmoid(Gating(x))
-                    q = q * gate_
-                    k = k * gate_
-                    v = v * gate_
-                else:
-                    # TODO: Test more methods to merge Attention Gates with GQA
-                    # TODO: Evaluate each method's ability to even out parameter sizes
-                    Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
-                    Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
-                    gate_qx = Gating_q(x)
-                    gate_q = torch.sigmoid(gate_qx)
-                    gate_kv = torch.sigmoid(Gating_kv(gate_qx))
-                    q = q * gate_q
-                    k = k * gate_kv
-                    v = v * gate_kv
-        k_store = k
-        v_store = v
+        if self.window_size is not None:
+            window_mask = torch.ones((1, 1, T, T), device=x.device)
+            window_mask = torch.triu(window_mask, diagonal=-self.window_size)
+            window_mask = self.bias[:,:,:T,:T] * window_mask
+
+        if self.gate:
+            if self.n_kv_group == self.n_head:
+                Gating = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                gate_ = torch.sigmoid(Gating(x))
+                q = q * gate_
+                k = k * gate_
+                v = v * gate_
+            else:
+                # TODO: Test more methods to merge Attention Gates with GQA
+                # TODO: Evaluate each method's ability to even out parameter sizes
+                Gating_q = nn.Linear(self.n_embd, self.n_embd, bias=True, device=x.device)
+                Gating_kv = nn.Linear(self.n_embd, self.kv_dim, bias=True, device=x.device)
+                gate_qx = Gating_q(x)
+                gate_q = torch.sigmoid(gate_qx)
+                gate_kv = torch.sigmoid(Gating_kv(gate_qx))
+                q = q * gate_q
+                k = k * gate_kv
+                v = v * gate_kv
+
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_h, T, hs)
         k = k.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
         v = v.view(B, T, self.n_kv_group, C // self.n_head).transpose(1, 2) # (B, n_kv, T, hs)
+
+        # rotate q and k before evaluating with the heads
+        if (self.rotary_emb_q is not None) and (self.rotary_emb_k is not None):
+            q = self.rotary_emb_q(q)
+            k = self.rotary_emb_k(k)
 
         y = None
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
@@ -276,9 +265,14 @@ class CausalSelfAttention(nn.Module):
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
-            if self.quantization_attn_dict["quantize_attn_act_qk_mult_input"]:
-                q = _fake_quantize(q, self.quantization_attn_dict["quantize_attn_act_qk_mult_input_bits"], self.quantization_attn_dict["activations_quant_method"])
-                k = _fake_quantize(k, self.quantization_attn_dict["quantize_attn_act_qk_mult_input_bits"], self.quantization_attn_dict["activations_quant_method"])
+            if self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input"]:
+                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input_bits"]
+                quant_method = self.quantization_attn_dict["activations_quant_method"]
+                q = fake_quantize_act(self, "attn_act_qk_mult_q_input", q, num_bits, quant_method)
+            if self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input"]:
+                num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_k_input_bits"]
+                quant_method = self.quantization_attn_dict["activations_quant_method"]
+                k = fake_quantize_act(self, "attn_act_qk_mult_k_input", k, num_bits, quant_method)
 
             att = None
             # manual implementation of attention
@@ -303,7 +297,9 @@ class CausalSelfAttention(nn.Module):
                 att = att + self.fire_pos_enc(x)
 
             if self.quantization_attn_dict["quantize_attn_act_softmax_input"]:
-                att = _fake_quantize(att, self.quantization_attn_dict["quantize_attn_act_softmax_input_bits"], self.quantization_attn_dict["activations_quant_method"])
+                num_bits = self.quantization_attn_dict["quantize_attn_act_softmax_input_bits"]
+                quant_method = self.quantization_attn_dict["activations_quant_method"]
+                att = fake_quantize_act(self, "attn_act_softmax_input", att, num_bits, quant_method)
 
             # softmax variation
             if self.softmax_variant_attn != 'softmax':
@@ -313,9 +309,14 @@ class CausalSelfAttention(nn.Module):
 
             att = self.attn_dropout(att)
 
-            if self.quantization_attn_dict["quantize_attn_act_pv_mult_input"]:
-                att = _fake_quantize(att, self.quantization_attn_dict["quantize_attn_act_pv_mult_input_bits"], self.quantization_attn_dict["activations_quant_method"])
-                v = _fake_quantize(v, self.quantization_attn_dict["quantize_attn_act_pv_mult_input_bits"], self.quantization_attn_dict["activations_quant_method"])
+            if self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input"]:
+                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_p_input_bits"]
+                quant_method = self.quantization_attn_dict["activations_quant_method"]
+                att = fake_quantize_act(self, "attn_act_pv_mult_p_input", att, num_bits, quant_method)
+            if self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input"]:
+                num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_v_input_bits"]
+                quant_method = self.quantization_attn_dict["activations_quant_method"]
+                v = fake_quantize_act(self, "attn_act_pv_mult_v_input", v, num_bits, quant_method)
 
             if self.n_head != self.n_kv_group:
                 v_repeated = v.repeat_interleave(self.n_head // self.n_kv_group, dim=1)
@@ -324,7 +325,9 @@ class CausalSelfAttention(nn.Module):
                 y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         if self.quantization_attn_dict["quantize_attn_act_pv_mult_output"]:
-            y = _fake_quantize(y, self.quantization_attn_dict["quantize_attn_act_pv_mult_output_bits"], self.quantization_attn_dict["activations_quant_method"])
+            num_bits = self.quantization_attn_dict["quantize_attn_act_pv_mult_output_bits"]
+            quant_method = self.quantization_attn_dict["activations_quant_method"]
+            y = fake_quantize_act(self, "attn_act_pv_mult_output", y, num_bits, quant_method)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
@@ -332,7 +335,9 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
 
         if self.quantization_attn_dict["quantize_attn_act_output"]:
-            y = _fake_quantize(y, self.quantization_attn_dict["quantize_attn_act_output_bits"], self.quantization_attn_dict["activations_quant_method"])
+            num_bits = self.quantization_attn_dict["quantize_attn_act_output_bits"]
+            quant_method = self.quantization_attn_dict["activations_quant_method"]
+            y = fake_quantize_act(self, "attn_act_output", y, num_bits, quant_method)
 
         return y, k_store, v_store
 
@@ -365,6 +370,8 @@ class MLP(nn.Module):
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act_bits)
                 elif arg.startswith("quantize_") and "mlp_act" in arg:
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act)
+                    if config.store_activations and arg != "quantize_mlp_act" and self.quantization_mlp_dict[arg]:
+                        create_activation_buffers(self, arg)
                 # Set MLP Linear Weight precision and quantization method
                 elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_bits"):
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_bits)
@@ -384,7 +391,9 @@ class MLP(nn.Module):
 
     def forward(self, x):
         if self.quantization_mlp_dict["quantize_mlp_act_input"]:
-            x = _fake_quantize(x, self.quantization_mlp_dict["quantize_mlp_act_input_bits"], self.quantization_mlp_dict["activations_quant_method"])
+            num_bits = self.quantization_mlp_dict["quantize_mlp_act_input_bits"]
+            quant_method = self.quantization_mlp_dict["activations_quant_method"]
+            x = fake_quantize_act(self, "mlp_act_input", x, num_bits, quant_method)
 
         if self.mlp_variant == "kan":
             x = self.kan(x)
@@ -393,12 +402,16 @@ class MLP(nn.Module):
             x = self.c_fc(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                x = _fake_quantize(x, self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"], self.quantization_mlp_dict["activations_quant_method"])
+                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
+                quant_method = self.quantization_mlp_dict["activations_quant_method"]
+                x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method)
 
             x = self.activation_variant(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                x = _fake_quantize(x, self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"], self.quantization_mlp_dict["activations_quant_method"])
+                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
+                quant_method = self.quantization_mlp_dict["activations_quant_method"]
+                x = fake_quantize_act(self, "mlp_act_activation_output", x, num_bits, quant_method)
 
             x = self.c_proj(x)
          
@@ -406,12 +419,16 @@ class MLP(nn.Module):
             x_in1 = self.c_fc_in1(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                x_in1 = _fake_quantize(x_in1, self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"], self.quantization_mlp_dict["activations_quant_method"])
+                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
+                quant_method = self.quantization_mlp_dict["activations_quant_method"]
+                x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method)
 
             x_in1 = self.activation_variant(x_in1)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                x_in1 = _fake_quantize(x_in1, self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"], self.quantization_mlp_dict["activations_quant_method"])
+                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
+                quant_method = self.quantization_mlp_dict["activations_quant_method"]
+                x_in1 = fake_quantize_act(self, "mlp_act_activation_output", x_in1, num_bits, quant_method)
 
             x_in2 = self.c_fc_in2(x)
             x_out = x_in1 * x_in2
@@ -420,10 +437,10 @@ class MLP(nn.Module):
         x = self.dropout(x)
         
         if self.quantization_mlp_dict["quantize_mlp_act_output"]:
-            x = _fake_quantize(x, self.quantization_mlp_dict["quantize_mlp_act_output_bits"], self.quantization_mlp_dict["activations_quant_method"])
-        
+            num_bits = self.quantization_mlp_dict["quantize_mlp_act_output_bits"]
+            quant_method = self.quantization_mlp_dict["activations_quant_method"]
+            x = fake_quantize_act(self, "mlp_act_output", x, num_bits, quant_method)
         return x
-
 
 class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
@@ -487,9 +504,6 @@ class GPT(nn.Module):
 
         self.config = config
 
-        # Initialize and set ouptut normalization (e.g. rmsnorm)
-        self.norm_variant_output = norm_dictionary[config.norm_variant_output](config)
-
         # Shared Parameters MLP
         shared_mlp_array = create_shared_param_group("mlp", config)
         # Shared Parameters Attention
@@ -504,7 +518,7 @@ class GPT(nn.Module):
             wte = word_embd,
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
-            ln_f = self.norm_variant_output,
+            ln_f = norm_dictionary[config.norm_variant_output](config),
         ))
 
         if self.config.use_abs_pos_embeddings:
@@ -578,6 +592,13 @@ class GPT(nn.Module):
                 block.attn.rotary_emb_q.update_num_angles(num_angles, device)
                 block.attn.rotary_emb_k.update_num_angles(num_angles, device)
 
+    def update_rope_length(self, rope_length):
+        """Update the number of angles for rotary embeddings in all attention layers."""
+        for block in self.transformer.h:
+            if hasattr(block.attn, 'rotary_emb_q') and hasattr(block.attn, 'rotary_emb_k'):
+                block.attn.rotary_emb_q.update_rope_length(rope_length)
+                block.attn.rotary_emb_k.update_rope_length(rope_length)
+
 
     def forward(self, idx, targets=None):
         device = idx.device
@@ -633,33 +654,16 @@ class GPT(nn.Module):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
     @classmethod
-    def from_pretrained(cls, model_type, override_args=None):
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        override_args = override_args or {} # default to empty dict
-        # only dropout can be overridden see more notes below
-        assert all(k == 'dropout' for k in override_args)
+    def from_pretrained(cls, config, model_type):
+        # assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         from transformers import GPT2LMHeadModel
-        print("loading weights from pretrained gpt: %s" % model_type)
-
-        # n_layer, n_head and n_embd are determined from model_type
-        config_args = {
-            'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
-            'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
-            'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
-            'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
-        }[model_type]
-        print("forcing vocab_size=50257, block_size=1024, bias=True")
-        config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
-        config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
-        config_args['bias'] = True # always True for GPT model checkpoints
-        config_args['window_size'] = 128 # always None for GPT model checkpoints
-        # we can override the dropout rate, if desired
-        if 'dropout' in override_args:
-            print(f"overriding dropout rate to {override_args['dropout']}")
-            config_args['dropout'] = override_args['dropout']
+        
+        print(f"loading weights from pretrained gpt: {model_type}")
+        
         # create a from-scratch initialized minGPT model
-        config = GPTConfig(**config_args)
         model = GPT(config)
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
@@ -672,21 +676,31 @@ class GPT(nn.Module):
         sd_keys_hf = sd_hf.keys()
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        transposed = ['attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
-        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-        for k in sd_keys_hf:
-            if any(k.endswith(w) for w in transposed):
+        # NOTE: the assert below will fail because we split out the c_attn linears!
+        # assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        for key in sd_keys_hf:
+            if any(key.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k].shape[::-1] == sd[k].shape
+                assert sd_hf[key].shape[::-1] == sd[key].shape
                 with torch.no_grad():
-                    sd[k].copy_(sd_hf[k].t())
+                    sd[key].copy_(sd_hf[key].t())
+            elif key.endswith('attn.c_attn.weight') or key.endswith('attn.c_attn.bias'):
+                # split into c_attn_q/k/v
+                q, k, v  = sd_hf[key].t().split(config.n_embd, dim=0)
+                q_key_str = key.replace("c_attn", "c_attn_q")
+                k_key_str = key.replace("c_attn", "c_attn_k")
+                v_key_str = key.replace("c_attn", "c_attn_v")
+                sd[q_key_str] = q
+                sd[k_key_str] = k
+                sd[v_key_str] = v
             else:
                 # vanilla copy over the other parameters
-                assert sd_hf[k].shape == sd[k].shape
+                assert sd_hf[key].shape == sd[key].shape
                 with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
+                    sd[key].copy_(sd_hf[key])
 
         return model
 

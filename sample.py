@@ -12,14 +12,17 @@ import torch
 import tiktoken
 from rich import print
 from torch.nn import functional as F
+from collections import OrderedDict
 
 from model import GPT, GPTConfig
-
+from model_info_util.model_info import print_summary, print_module_structure, print_model_blocks
+from variations.model_variations import model_variation_dictionary
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Inference from trained models")
-    parser.add_argument("--device", type=str, required=True, help="Device to run inference (e.g., 'cpu', 'cuda', 'cuda:0', 'cuda:1')")
-    parser.add_argument("--out_dir", type=str, required=True, help="Directory to load checkpoint from")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to run inference (e.g., 'cpu', 'cuda', 'cuda:0', 'cuda:1')")
+    parser.add_argument("--out_dir", type=str, default="out", help="Directory to load checkpoint from")
+    parser.add_argument("--quantization_data_file", type=str, default=None, help="File name to export the quantized weights/activations, scale factor, and zero point")
     parser.add_argument("--init_from", type=str, default="resume", help="Either 'resume' (from an out_dir) or a GPT-2 variant (e.g., 'gpt2-xl')")
     parser.add_argument("--start", type=str, default="\n", help="Start text for generation. Can specify a file using 'FILE:prompt.txt'")
     parser.add_argument("--num_samples", type=int, default=3, help="Number of inference streams to draw")
@@ -37,7 +40,9 @@ def parse_args():
     parser.add_argument('--chart_type', type=str, default='heatmap', choices=['heatmap', 'barchart'], help="Type of chart to display: 'heatmap' or 'barchart'")
     parser.add_argument('--block_size', type=int, default=None, help="Block size for context length, default is model's block size")
     parser.add_argument('--sym_rot_num_angles', type=int, default=None, help="Number of angles for symmetrical rotary embedding")
+    parser.add_argument('--rope_length', type=int, default=None, help="Number of embeddings to rotate (must be an even number <= total embedding size)")
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
+    parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
     return parser.parse_args()
 
@@ -89,6 +94,16 @@ def save_args(args, out_dir):
         json.dump(vars(args), f, indent=4)
 
 
+#TODO: Rename to reflect general purpose
+def save_quantized_data(state_dict, out_file):
+    to_save = OrderedDict()
+    for k, v in list(state_dict.items()):
+        # if "mlp_act" in k or "attn_act" in k or k.endswith("quantized_bias") or k.endswith("bias_norm") or k.endswith("zero_point") or k.endswith("quantized_weight") or k.endswith("weight_norm"):
+        to_save[k] = v.cpu().numpy()
+
+    with open(f"{out_file}.pkl", 'wb') as f:
+        pickle.dump(to_save, f)
+
 def main():
     args = parse_args()
 
@@ -116,20 +131,42 @@ def main():
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
+
+        if args.quantization_data_file:
+            save_quantized_data(state_dict, args.quantization_data_file)
+
+        model.load_state_dict(state_dict, strict=False)
     else:
-        model = GPT.from_pretrained(args.init_from, dict(dropout=0.0))
+        # need to create a completely "default" GPTConfig and overwrite using model_variations
+        gptconf = GPTConfig()
+        variation_dict = model_variation_dictionary[args.init_from]
+        for k in variation_dict:
+            gptconf[k] = variation_dict[k]
+        model = GPT.from_pretrained(gptconf, model_type=args.init_from)
 
     model.eval()
     model.to(args.device)
+
+    # Print the model summary
+    if args.print_model_info:
+        print_summary(model)
+        print_model_blocks(model)
+        print_module_structure(model)
+
     if args.compile:
         model = torch.compile(model)
 
+    # Inference with different block size (note: for this one cannot use abs pos embeddings)
     if args.block_size:
         model.update_block_size(args.block_size)
 
+    # Inference with different number of angles
     if args.sym_rot_num_angles:
         model.update_num_angles(args.sym_rot_num_angles)
+
+    # Inference with different Rope Length
+    if args.rope_length:
+        model.update_rope_length(args.rope_length)
 
     load_meta = False
     meta_path = None

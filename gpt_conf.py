@@ -19,6 +19,11 @@ class GPTConfig:
     moe_top_k: int = 2
     moe_router_scheme: str = "softmax"
 
+    # Logging options
+    softmax_io_logging: bool = False
+    consmax_beta_gamma_logging: bool = False
+    plot_statistics: bool = False
+
     # Training options
     ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
     use_gradient_checkpointing: bool = False
@@ -50,10 +55,13 @@ class GPTConfig:
     ## ConSmax Options
     consmax_initial_beta: float = 2.0 # beta adjustment
     consmax_initial_gamma: float = 100.0 # denominator adjustment
-    consmax_use_euler_base: bool = True # use 'e' as base for ConSmax, default
     consmax_base: float = 2.0 # base to utilize for ConSmax
+    consmax_use_euler_base: bool = True # use 'e' as base for ConSmax, default
 
-    ## SaturatingConSmax special options (otherwise same as ConSmax)
+    ## ConSmaxV2 Special Options
+    consmax_per_head: bool = True # different beta gamma per head
+
+    ## SaturatingConSmax Special options (otherwise same as ConSmax)
     consmax_saturation: float = 11.0 # for SaturatingConSmax saturation point
     consmax_learnable_beta: bool = True
     consmax_learnable_gamma: bool = True
@@ -73,9 +81,11 @@ class GPTConfig:
 
     ## Strongermax options
     strongermax_strength: float = 2.0 # Softermax with option of 'stronger' (larger integer) bases
-    strongermax_sum_to_1: bool = False # Softermax with option of 'stronger' (larger integer) bases
-    strongermax_divisor: float = 1.0 # Softermax with option of 'stronger' (larger integer) bases
-    strongermax_use_xmax: bool = True # Softermax with option of 'stronger' (larger integer) bases
+    strongermax_sum_to_1: bool = False
+    strongermax_divisor: float = 1.0
+    strongermax_use_xmax: bool = True
+    strongermax_xmax_guess: float = 1.0
+    strongermax_overflow_recompute: bool = False
 
     ## ExpPolymax options
     exppolymax_use_euler_base: bool = True
@@ -85,10 +95,13 @@ class GPTConfig:
     exppolymax_divisor: float = 1.0
 
     ## Softplus options
-    softplus_divisor: float = 100.0
+    softplus_divisor: float = 256.0
+
+    ## Softplus options
+    relumax_divisor: float = 256.0
 
     ## Squareplus options
-    squareplus_divisor: float = 100.0
+    squareplus_divisor: float = 256.0
 
     # Positional Embeddings Variations
     use_abs_pos_embeddings: bool = True # Note: one can use this AND rotary embeddings
@@ -97,11 +110,19 @@ class GPTConfig:
     use_rotary_embeddings: bool = False
     sym_rot_num_angles: int = 512
     rope_variant: str = "rope" # options: "shortrope", "rope"
-    shortrope_length: int = 8 # number of embeddings to use in shortrope
+    rope_length: int = 8 # number of embeddings to use in shortrope
 
     ## Embedding Intialization Options
     embedding_mean_init: float= 0.0
     embedding_std_init: float= 0.02
+
+    ## FIRE Options (Functional Interpolation for Relative Positional Encoding)
+    fire_log_bias: float = 1.0
+    fire_num_hidden_layers: int = 1
+    fire_mlp_width: int = 32
+    fire_init_c: float = 0.1
+    fire_init_L: float = 512.0
+    fire_outermost_sigma: bool = False
 
     # Structuring Options, remember to compile the model
     use_post_ln: bool = True
@@ -135,7 +156,7 @@ class GPTConfig:
     linear_std_init: float= 0.02
 
     # Quantizations
-    
+
     ## Embedding Quantizations
     quantize_wte: bool = False
     quantize_wpe: bool = False
@@ -150,12 +171,16 @@ class GPTConfig:
     quantize_attn_act_bits: int = 8
     quantize_attn_act_input: bool = False
     quantize_attn_act_input_bits: int = None
-    quantize_attn_act_qk_mult_input: bool = False
-    quantize_attn_act_qk_mult_input_bits: int = None
+    quantize_attn_act_qk_mult_q_input: bool = False
+    quantize_attn_act_qk_mult_q_input_bits: int = None
+    quantize_attn_act_qk_mult_k_input: bool = False
+    quantize_attn_act_qk_mult_k_input_bits: int = None
     quantize_attn_act_softmax_input: bool = False
     quantize_attn_act_softmax_input_bits: int = None
-    quantize_attn_act_pv_mult_input: bool = False
-    quantize_attn_act_pv_mult_input_bits: int = None
+    quantize_attn_act_pv_mult_p_input: bool = False
+    quantize_attn_act_pv_mult_p_input_bits: int = None
+    quantize_attn_act_pv_mult_v_input: bool = False
+    quantize_attn_act_pv_mult_v_input_bits: int = None
     quantize_attn_act_pv_mult_output: bool = False
     quantize_attn_act_pv_mult_output_bits: int = None
     quantize_attn_act_output: bool = False
@@ -170,6 +195,7 @@ class GPTConfig:
     quantize_mlp_act_activation_output_bits: int = None
     quantize_mlp_act_output: bool = False
     quantize_mlp_act_output_bits: int = None
+    store_activations: bool = False
 
     ## Linear Quantizations
     quantize_linear_method: str = "affine_quant"
@@ -193,13 +219,13 @@ class GPTConfig:
         try:
             with open(filename, 'r') as json_file:
                 config_dict = json.load(json_file)
-            
+
             # Get all field names of the dataclass
             field_names = {f.name for f in fields(cls)}
-            
+
             # Filter the loaded dict to only include valid fields
             filtered_dict = {k: v for k, v in config_dict.items() if k in field_names}
-            
+
             # Create and return a new instance
             return cls(**filtered_dict)
         except FileNotFoundError:
@@ -211,14 +237,14 @@ class GPTConfig:
         except TypeError as e:
             print(f"Error: Invalid data in JSON file. {str(e)}")
             return None
-    
+
     def to_json(self, filename: str):
         """
         Function to save a GPTConfig object as json to be used for later model creation
-        
-        input: 
+
+        input:
         - fout: string = filename of saved config file
-        
+
         """
         conf_dict = asdict(self)
 
