@@ -177,6 +177,17 @@ def create_statistics(self, graph_y_labels):
         box_plot_input_data = []
         box_plot_output_data = []
 
+        for layer in range(self.args.n_layer):
+            zeros_location = f"transformer.h[{layer}].attn.softmax_layer_attn.zeros"
+            zeros = eval(f"self.model.{zeros_location}")
+
+            print("Iter: ", self.iter_num)
+            print('Layer: ', layer)
+            print("mean: ", np.mean(zeros))
+            print("stdev: ", np.std(zeros))
+            print("max: ", np.max(zeros))
+            print("min: ", np.min(zeros))
+
         for layer in range (self.args.n_layer):
             # Inputs
             inputs_location = f"transformer.h[{layer}].attn.softmax_layer_attn.inputs"

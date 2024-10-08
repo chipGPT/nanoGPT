@@ -504,10 +504,22 @@ class ReLUMax(nn.Module):
         self.relumax = nn.ReLU()
         self.relumax_divisor = config.relumax_divisor
         self.div_by_seq_len = config.div_by_seq_len
+        self.zeros = []
 
     def forward(self, x):
 
         result = self.relumax(x) / self.relumax_divisor
+
+        result_float32 = result.to(torch.float32)
+        lower_triangular = result_float32[torch.tril(torch.ones_like(result_float32)) == 1]
+
+        # Count the number of zeros in the lower triangular part of the tensor
+        num_zeros = torch.sum(lower_triangular == 0).item()
+
+        # Calculate the percentage of zeros
+        percentage_zeros = (num_zeros / torch.sum(torch.tril(torch.ones_like(result_float32)))) * 100
+
+        self.zeros.append(percentage_zeros.item())
 
         # divide by sequence length
         if self.div_by_seq_len:
