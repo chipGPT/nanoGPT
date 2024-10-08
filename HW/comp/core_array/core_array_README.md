@@ -1,4 +1,4 @@
-# Core Array Project
+# Core Array 
 
 ## Overview
 
