@@ -44,6 +44,17 @@ def parse_args():
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
 
+    # Steering Vector Related
+    parser.add_argument('--save_avg_vector', type=str, default=None, help="Path to save the average vector of the start text to an .npy file")
+    parser.add_argument('--apply_vector_file1', type=str, default=None, help="First .npy file to load the vector for subtraction")
+    parser.add_argument('--apply_vector_file2', type=str, default=None, help="Second .npy file to load the vector for subtraction")
+    parser.add_argument('--steering_vector_scaling_factor', type=float, default=1.0, help="Scaling factor to apply after subtracting vectors")
+    parser.add_argument('--apply_to_layer_idx', type=int, default=None, help="Layer index at which to apply the resulting vector")
+
+    parser.add_argument("--eval_only", action=argparse.BooleanOptionalAction, help="Enable evaluation only mode to calculate and print validation loss")
+    parser.add_argument("--eval_iters", type=int, default=250, help="iterations for evaluation")
+    parser.add_argument("--eval_dataset", type=str, default=None, help="dataset for evaluation")
+
     return parser.parse_args()
 
 
@@ -104,6 +115,32 @@ def save_quantized_data(state_dict, out_file):
     with open(f"{out_file}.pkl", 'wb') as f:
         pickle.dump(to_save, f)
 
+def load_validation_data(block_size, eval_dataset):
+    # Load validation data similar to how train data is handled
+    val_path = os.path.join('data', eval_dataset, 'val.bin')
+    assert os.path.exists(val_path), f"Validation data file {val_path} not found."
+    # Assuming validation data is similar in format to train data
+    val_data = np.memmap(val_path, dtype=np.uint16, mode='r')
+    return val_data
+
+def get_batch(data, block_size, device):
+    # Create a random batch from the dataset
+    ix = torch.randint(len(data) - block_size, (1,))
+    x = torch.stack([torch.from_numpy((data[i:i + block_size]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((data[i + 1:i + 1 + block_size]).astype(np.int64)) for i in ix])
+    return x.to(device), y.to(device)
+
+def calculate_validation_loss(model, val_data, block_size, eval_iters, device, dtype):
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for _ in range(eval_iters):
+            X, Y = get_batch(val_data,  block_size, device)
+            with torch.amp.autocast(device_type=device, dtype=dtype):
+                logits, loss = model(X, Y)
+            losses.append(loss.item())
+    return np.mean(losses)
+
 def main():
     args = parse_args()
 
@@ -120,10 +157,29 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     save_args(args, out_dir)
 
+
     if args.init_from == 'resume':
         ckpt_path = os.path.join(args.out_dir, 'ckpt.pt')
         checkpoint = torch.load(ckpt_path, map_location=args.device)
         checkpoint['model_args']['dropout'] = 0.0
+        if args.save_avg_vector:
+            print(f"saving {args.save_avg_vector}")
+            checkpoint['model_args']['obtain_vector_at_layer_idx'] = args.apply_to_layer_idx
+            checkpoint['model_args']['obtain_vector_file'] = args.save_avg_vector
+        # If vectors are provided, load and subtract them, then apply to a designated layer during generation
+        if args.apply_vector_file1 and args.apply_vector_file2:
+            vector1 = np.load(args.apply_vector_file1)
+            vector2 = np.load(args.apply_vector_file2)
+            diff_vector = vector1 - vector2
+            torch.from_numpy(diff_vector).float().to(args.device)
+            diff_vector_tensor = torch.from_numpy(diff_vector).float().to(args.device)
+            diff_vector_cpu = diff_vector_tensor.cpu().numpy()  # Move the tensor to CPU and convert it to a NumPy array
+            np.save("temp.npy", diff_vector_cpu)
+
+            # Convert to tensor and set in the model for application at the designated layer
+            checkpoint['model_args']['apply_vector_file']= "temp.npy"
+            checkpoint['model_args']['apply_vector_at_layer_idx']= args.apply_to_layer_idx
+            checkpoint['model_args']['apply_vector_scaling_factor']= args.steering_vector_scaling_factor
         gptconf = GPTConfig(**checkpoint['model_args'])
         model = GPT(gptconf)
         state_dict = checkpoint['model']
@@ -137,48 +193,23 @@ def main():
 
         model.load_state_dict(state_dict, strict=False)
     else:
-        # need to create a completely "default" GPTConfig and overwrite using model_variations
+        # Need to create a completely "default" GPTConfig and overwrite using model_variations
         gptconf = GPTConfig()
         variation_dict = model_variation_dictionary[args.init_from]
         for k in variation_dict:
             gptconf[k] = variation_dict[k]
         model = GPT.from_pretrained(gptconf, model_type=args.init_from)
 
-    model.eval()
-    model.to(args.device)
-
-    # Print the model summary
-    if args.print_model_info:
-        print_summary(model)
-        print_model_blocks(model)
-        print_module_structure(model)
-
-    if args.compile:
-        model = torch.compile(model)
-
-    # Inference with different block size (note: for this one cannot use abs pos embeddings)
-    if args.block_size:
-        model.update_block_size(args.block_size)
-
-    # Inference with different number of angles
-    if args.sym_rot_num_angles:
-        model.update_num_angles(args.sym_rot_num_angles)
-
-    # Inference with different Rope Length
-    if args.rope_length:
-        model.update_rope_length(args.rope_length)
-
+    # Load meta information if available
     load_meta = False
     meta_path = None
     separator_token = None
     if args.init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']:
-
         meta_paths = [
-                os.path.join(args.out_dir, 'meta.pkl'),
-                os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
-                ]
+            os.path.join(args.out_dir, 'meta.pkl'),
+            os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
+        ]
 
-        load_meta = False
         for meta_path in meta_paths:
             if os.path.exists(meta_path):
                 load_meta = True
@@ -210,14 +241,65 @@ def main():
     if args.start.startswith('FILE:'):
         with open(args.start[5:], 'r', encoding='utf-8') as f:
             args.start = f.read()
+
     start_ids = encode(args.start)
+    model.eval()
+    model.to(args.device)
+
+    # Print the model summary
+    if args.print_model_info:
+        print_summary(model)
+        print_model_blocks(model)
+        print_module_structure(model)
+
+
+    if args.compile:
+        model = torch.compile(model)
+
+    # Inference with different block size (note: for this one cannot use abs pos embeddings)
+    if args.block_size:
+        model.update_block_size(args.block_size)
+
+    # Inference with different number of angles
+    if args.sym_rot_num_angles:
+        model.update_num_angles(args.sym_rot_num_angles)
+
+    # Inference with different Rope Length
+    if args.rope_length:
+        model.update_rope_length(args.rope_length)
+
+    if args.eval_only:
+        print("Running in eval_only mode...")
+        # Load the validation dataset
+        print(model.config.block_size)
+        val_data = load_validation_data(model.config.block_size,
+                                        args.eval_dataset)
+        # Calculate validation loss
+        val_loss = calculate_validation_loss(model, val_data,
+                                             model.config.block_size,
+                                             args.eval_iters, args.device, ptdtype)
+        print(f"Validation Loss: {val_loss:.4f}")
+        return
+
+    x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
+    # Obtain vector from the specified layer and save it to a file if required
+    if args.save_avg_vector:
+        x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
+        # Run the model to trigger vector extraction
+        with torch.no_grad():
+            with ctx:
+                block_size = args.block_size if args.block_size else model.config.block_size
+                idx_cond = x if x.size(1) <= block_size else x[:, -block_size:]
+                logits, _ = model(idx_cond)
+        print(f"Obtained vector saved to {args.save_avg_vector}")
+
+
 
     if args.interactive:
         interactive_generation(model, start_ids, args.device, args.max_new_tokens, args.temperature, args.top_k, args.stop_string, decode, encode)
     else:
         x = torch.tensor(start_ids, dtype=torch.long, device=args.device)[None, ...]
-
-        # run generation
+        # Run generation
         with torch.no_grad():
             with ctx:
                 for k in range(args.num_samples):
@@ -238,12 +320,13 @@ def main():
                             save_chart(probs, x, decode, step, out_dir, args.last_k_tokens, args.chart_type, selected_token)
 
                     output_line = decode(x[0].tolist()).replace(separator_token, " ") if separator_token else decode(x[0].tolist())
+                    if args.apply_vector_file1:
+                        print(f"Scaling factor: {args.steering_vector_scaling_factor}")
                     print("[bold green]" + output_line)
                     print('---------------')
                     if args.sample_file:
                         with open(args.sample_file, "w") as file:
                             file.write(output_line)
-
 
 if __name__ == "__main__":
     main()

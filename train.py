@@ -41,6 +41,19 @@ def parse_args():
     training_group = parser.add_argument_group('training_group')
     logging_group = parser.add_argument_group('logging_group')
 
+    # Export Args
+    ## Factored WTE
+    model_group.add_argument('--import_wte_npy', default=None, type=str, help='Path to import the embedding table as a .npy file')
+    model_group.add_argument('--export_wte_npy', default=None, type=str, help='Path to export the embedding table as a .npy file')
+    model_group.add_argument('--export_wte_each_eval', default=False, action=argparse.BooleanOptionalAction, help="Requires --export_wte is not None. If this is so, will always export embedding to numpy after evaluation")
+    model_group.add_argument('--import_wte_freeze', default=False, action=argparse.BooleanOptionalAction, help="Whether to freeze an imported wte")
+
+    ## Factored Scale Matrices
+    model_group.add_argument('--import_scale_matrices_npz', default=None, type=str, help='Path to import the scale matrices as a .npz file')
+    model_group.add_argument('--export_scale_matrices_npz', default=None, type=str, help='Path to export the scale matrices as a .npz file')
+    model_group.add_argument('--export_scale_matrices_each_eval', default=False, action=argparse.BooleanOptionalAction, help="Requires --export_scale_matrices_npz is not None. If this is so, will always export to npz after evaluation")
+    model_group.add_argument('--import_scale_matrices_freeze', default=False, action=argparse.BooleanOptionalAction, help="Whether to freeze scaled_matrices")
+
     # I/O args
     training_group.add_argument('--out_dir', default='out', type=str)
     training_group.add_argument('--eval_interval', default=250, type=int)
@@ -48,10 +61,14 @@ def parse_args():
     training_group.add_argument('--eval_iters', default=200, type=int)
     training_group.add_argument('--eval_only', default=False, action=argparse.BooleanOptionalAction)
 
+    # Loss variations
+    training_group.add_argument('--focus_on_top1_loss', default=False, action=argparse.BooleanOptionalAction)
+
     # Sample args
     training_group.add_argument('--max_sample_tokens', default=None, type=int, help="If set, maximum number of tokens to sample and print after each validation loss")
     training_group.add_argument('--sample_each_eval', default=False, action=argparse.BooleanOptionalAction, help="Produce sample even if the validation loss did not improve. Allows for testing what overtraining looks like.")
     training_group.add_argument('--sample_start_tokens', default='\n', type=str)
+    training_group.add_argument('--sample_only', default=False, action=argparse.BooleanOptionalAction, help="Run only the sampling process and exit")
 
     # Checkpoint args
     training_group.add_argument('--only_save_checkpoint_at_end', default=False, action=argparse.BooleanOptionalAction)
@@ -72,7 +89,9 @@ def parse_args():
     model_group.add_argument('--n_layer', default=6, type=int)
     model_group.add_argument('--n_head', default=6, type=int)
     model_group.add_argument('--n_kv_group', default=None, type=int)
-    model_group.add_argument('--n_embd', default=384, type=int)
+    model_group.add_argument('--n_embd', default=384, type=int, help="Size of embeddings in decoder layer and wte unless n_embd_wte is set." )
+    model_group.add_argument('--n_embd_wte', default=None, type=int, help="If different from n_embd, an adapter table will be automatically created")
+    model_group.add_argument('--n_embd_wte_scale_tying', default=True, action=argparse.BooleanOptionalAction, help="Enable weight tying for scale up and scale down matrices, only has effects if n_embd_wte is not 'None'.")
     model_group.add_argument('--dropout', default=0.2, type=float)
     model_group.add_argument('--use_post_ln', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--window_size', default=None, type=int, help="Sliding window size, note this cannot be greater than block size")
@@ -82,6 +101,16 @@ def parse_args():
     model_group.add_argument('--n_experts', default=8, type=int, help="set number of experts per MoE layer")
     model_group.add_argument('--moe_top_k', default=2, type=int)
     model_group.add_argument('--moe_router_scheme', default="softmax", type=str, help="option to set routing scheme for MoE layer, defaults to softmax")
+
+    ## Steering Vector Opts
+    ### options for application of steering vectors
+    model_group.add_argument('--apply_vector_at_layer_idx', default=None, type=int)
+    model_group.add_argument("--apply_vector_file", type=str, default=None, help="single vector to apply with scaling factor")
+    model_group.add_argument("--apply_vector_scaling_factor", type=float, default=1.0, help="scaling factor to apply to steering vector")
+
+    ### options for intercepting vectors
+    model_group.add_argument('--obtain_vector_at_layer_idx', default=None, type=int)
+    model_group.add_argument("--obtain_vector_file", type=str, default=None, help="initial KAN activation")
 
     ## MLP Options
     model_group.add_argument('--use_parallel_mlp', default=False, action=argparse.BooleanOptionalAction)
@@ -258,9 +287,7 @@ def parse_args():
     model_group.add_argument( "--fire_init_L", type=float, default=512.0, help="init_L: initial value of threshold L in FIRE (fixed values without L_multiplier)")
     model_group.add_argument( "--fire_outermost_sigma", type=bool, default=False, action=argparse.BooleanOptionalAction, help="whether or not adding outermost sigma in mlp in FIRE")
 
-
     # SOFTMAX VARIATIONS
-
     softmax_variations = [
         "saturatingconsmax",
         "consmax",
@@ -268,6 +295,7 @@ def parse_args():
         "consmax_quan",
         "polymax",
         "relumax",
+        "sigmoidmax",
         "vpolymax",
         "exppolymax",
         "strongermax",
@@ -307,6 +335,9 @@ def parse_args():
     ### ReLUMax Options
     model_group.add_argument("--relumax_divisor", type=float, default=256.0)
 
+    ### SimgoidMax Options
+    model_group.add_argument("--sigmoidmax_divisor", type=float, default=256.0)
+
     ### SigSoftmax Options
     model_group.add_argument('--sigsoftmax_use_euler_base', default=True, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--sigsoftmax_base", type=float, default=2.0)
@@ -338,7 +369,8 @@ def parse_args():
     model_group.add_argument('--div_by_seq_len', default=False, action=argparse.BooleanOptionalAction)
 
     # Gradient Checkpointing
-    training_group.add_argument('--use_gradient_checkpointing', default=False, action=argparse.BooleanOptionalAction, help="Memory efficient training, but takes longer time to train due to trading compute time for memory efficiency. For best memory tradeoff omit the --compile flag. For medium memory tradeoff add --compile.")
+    model_group.add_argument('--use_gradient_checkpointing', default=False, action=argparse.BooleanOptionalAction, help="Memory efficient training, but takes longer time to train due to trading compute time for memory efficiency. For best memory tradeoff omit the --compile flag. For medium memory tradeoff add --compile.")
+    model_group.add_argument('--recompute_backward_pass', default=False, action=argparse.BooleanOptionalAction, help="Recomputes for the backward pass, must use with --use_gradient_checkpointing")
 
     # Optimizer args
     training_group.add_argument('--max_iters', default=3500, type=int)
@@ -372,6 +404,7 @@ def parse_args():
 
     # Module And Parameter Logging and Plots of Summary Statistics
     model_group.add_argument('--softmax_io_logging', default=False, action=argparse.BooleanOptionalAction, help="logs inputs and outputs of supported softmaxes")
+    model_group.add_argument('--softmax_io_log_interval', default=1, type=int)
     model_group.add_argument('--consmax_beta_gamma_logging', default=False, action=argparse.BooleanOptionalAction, help="logs beta and gamma")
     logging_group.add_argument('--create_statistics', default=False, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--plot_statistics', default=False, action=argparse.BooleanOptionalAction)
@@ -434,7 +467,12 @@ class Trainer:
             self.args.lr_decay_iters = self.args.max_iters
 
         self.setup()
-        self.stats = initialize_statistics(self.args.n_layer, self.args.n_head)
+
+        if self.args.sample_only:
+            self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+
+        if self.args.create_statistics:
+            self.stats = initialize_statistics(self.args.n_layer, self.args.n_head)
 
     def setup(self):
         # Setup DDP
@@ -475,7 +513,6 @@ class Trainer:
         # TODO only add if they are defined from the argparse
         self.model_args = {action.dest: getattr(self.args, action.dest) for action in self.model_group._group_actions}
         self.model_args['vocab_size'] = None
-        self.model_args['use_gradient_checkpointing'] = self.args.use_gradient_checkpointing
 
         # Training settings
         self.training_args = {action.dest: getattr(self.args, action.dest) for action in self.training_group._group_actions}
@@ -678,6 +715,22 @@ class Trainer:
         return x, y
 
     @torch.no_grad()
+    def custom_loss_with_top1_focus(self, logits, targets):
+        # Compute standard cross-entropy loss
+        ce_loss = torch.nn.functional.cross_entropy(logits, targets)
+
+        # Get the top-1 predictions
+        top1_preds = torch.argmax(logits, dim=-1)
+
+        # Focus more on the top-1 prediction by adding an additional term
+        correct_top1 = (top1_preds == targets).float()  # 1 for correct, 0 for incorrect
+        top1_focus_loss = 1.0 - correct_top1  # Emphasize the wrong top-1 predictions
+
+        # Combine the original cross-entropy loss and the top-1 focus term
+        loss = ce_loss + 0.5 * top1_focus_loss.mean()  # Adjust the weight (0.5) as needed
+        return loss
+
+    @torch.no_grad()
     def estimate_loss(self):
         out = {}
         self.model.eval()
@@ -843,10 +896,25 @@ class Trainer:
                         # Try new checkpoint if better val loss
                         if self.args.max_sample_tokens:
                             self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
-                    elif self.args.sample_each_eval:
-                        # Try model inference (e.g. exploring inference from overfitting)
-                        if self.args.max_sample_tokens:
-                            self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                        # export embedding table to npy file
+                        if self.args.export_wte_npy:
+                            self.raw_model.export_wte(self.args.export_wte_npy)
+                        # export scale matrices to npz file
+                        if self.args.export_scale_matrices_npz:
+                            self.raw_model.export_scale_matrices(self.args.export_scale_matrices_npz)
+                    else:
+                        if self.args.sample_each_eval:
+                            # Try model inference (e.g. exploring inference from overfitting)
+                            if self.args.max_sample_tokens:
+                                self.sample_and_print(self.args.max_sample_tokens, start_tokens=self.args.sample_start_tokens)
+                        if self.args.export_wte_each_eval:
+                            # export wte table to npy file
+                            if self.args.export_wte_npy:
+                                self.raw_model.export_wte(self.args.export_wte_npy)
+                        if self.args.export_scale_matrices_each_eval:
+                            # export scale matrices to npz file
+                            if self.args.export_scale_matrices_npz:
+                                self.raw_model.export_scale_matrices(self.args.export_scale_matrices_npz)
 
                     if self.args.patience is not None and num_steps_with_worse_loss >= self.args.patience:
                         print(f"Early Stopping: loss has not decreased in {self.args.patience + 1} steps")
@@ -854,7 +922,7 @@ class Trainer:
                     if losses['val'] > self.best_val_loss:
                         num_steps_with_worse_loss += 1
 
-                if self.iter_num == 0 and self.args.eval_only:
+                if self.args.eval_only:
                     break
 
                 for micro_step in range(self.args.gradient_accumulation_steps):
@@ -863,6 +931,10 @@ class Trainer:
 
                     with self.ctx:
                         logits, loss = self.model(self.X, self.Y)
+
+                        if self.args.focus_on_top1_loss:
+                            loss = self.custom_loss_with_top1_focus(logits, self.Y)  # Use custom loss
+
                         loss = loss / self.args.gradient_accumulation_steps
 
                     self.X, self.Y = self.get_batch('train')
@@ -905,7 +977,7 @@ class Trainer:
                     self.log_metrics_non_validation(lossf, running_mfu, self.iter_num)
 
 
-                if self.args.create_statistics:
+                if self.args.create_statistics and local_iter_num % self.args.softmax_io_log_interval == 0:
                     create_statistics(self, graph_y_labels)
 
 
@@ -950,7 +1022,9 @@ class Trainer:
 def main():
     args, model_group, training_group, logging_group = parse_args()
     trainer = Trainer(args, model_group, training_group, logging_group)
-    trainer.train()
+
+    if not args.sample_only:
+        trainer.train()
 
     if trainer.ddp:
         destroy_process_group()

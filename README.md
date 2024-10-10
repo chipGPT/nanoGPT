@@ -95,22 +95,25 @@ Training with a GPU is highly recommended, to do this now run (should take
 around 3-20 minutes depending on one's GPU):
 
 ```bash
-python3 train.py --device="cuda" --dataset="shakespeare_char" --out_dir="out_shakespeare_char"
+python3 train.py --compile
 ```
 
-The first line will show the current configuration settings for the training for
-reference, including softmax type, positional embedding settings, and
-conventional hyperparameters (number of layers and heads, etc.).
+Highly recommend setting `--max_sample_tokens` which generates and shows outputs
+at each new saved checkpoint.
+
+```bash
+python3 train.py --max_sample_tokens 100 --compile
+```
 
 ### Perform Inference From Custom Model
 
 minutes and the best validation loss is 1.4697. Based on the configuration, the
-model checkpoints are being written into the `--out_dir` directory
-`out-shakespeare-char`. So once the training finishes we can sample from the
+model checkpoints are being written into the `--out_dir` directory, that
+defaults to `./out`. So once the training finishes we can sample from the
 best model by pointing the sampling script at this directory:
 
 ```bash
-python3 sample.py --out_dir="out_shakespeare_char" --device="cuda"
+python3 sample.py
 ```
 
 This generates a few samples, for example:
@@ -146,7 +149,7 @@ checkpoints created from training using `validation loss` as a figure of merit.
 To run the experiment create or modify an existing json file in the `explorations` folder:
 
 ```bash
-python3 run_experiments.py --config explorations/config.json --output_dir out_test
+python3 run_experiments.py -c explorations/config.json
 ```
 
 This will create logs in the following directories:
@@ -156,7 +159,8 @@ csv_logs/
 logs/
 ```
 
-and save checkpoints for inference in `out_test`
+This also saves timestamped and labelled folders within the `output_dir` (which
+defaults to `out/` subdirectories)
 
 ### Inspect and Monitor Best Val Losses
 
@@ -195,12 +199,13 @@ bash start_tensorboard.sh
 
 You can view live validation loss updates on url: [http://localhost:6006](http://localhost:6006)
 
-### Troubleshooting
+Note: Only one tensorboard process can grab port 6006 at time, try closing other
+processes (e.g. other tensorboards) using this port, or choose an alternative
+port if new tensorboard isn't showing.
 
-Tensorboard script not starting?
+## TODO Section:
 
-Only one process can grab port 6006 at time, try closing other processes (e.g.
-other tensorboards) using this port, or choose an alternative port.
+TODO: Add links and descriptions to other Readme's and Demos.
 
 ## Contributing
 

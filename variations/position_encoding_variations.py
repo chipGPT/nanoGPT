@@ -188,24 +188,24 @@ class FIRE(nn.Module):
 
     def __init__(self, config, num_heads=12, eps=1e-6):
         super(FIRE, self).__init__()
-        
+
         mlp_layers = []
 
         if config.fire_num_hidden_layers >= 1:
             # First linear layer
             mlp_layers.append(nn.Linear(1, config.fire_mlp_width))
-            
+
             for _ in range(config.fire_num_hidden_layers - 1):
                 mlp_layers.append(nn.ReLU())
                 mlp_layers.append(nn.Linear(config.fire_mlp_width, config.fire_mlp_width))
-            
+
             mlp_layers.append(nn.ReLU())
             # Final linear layer
             mlp_layers.append(nn.Linear(config.fire_mlp_width, num_heads))
 
         elif config.fire_num_hidden_layers == 0:
             mlp_layers.append(nn.Linear(1, num_heads))
-        
+
         if config.fire_outermost_sigma:
             mlp_layers.append(nn.ReLU())
 

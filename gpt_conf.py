@@ -9,6 +9,35 @@ class GPTConfig:
     n_head: int = 12
     n_kv_group: int = 12
     n_embd: int = 768
+
+    # Steering Vectors
+    ## Where to intercept
+    apply_vector_at_layer_idx: int = None
+    obtain_vector_at_layer_idx: int = None
+
+    ## Files to insert or obtain vectors from
+    apply_vector_file: str = None
+    apply_vector_scaling_factor: float = 1.0
+    obtain_vector_file: str = None
+
+    # If Factorizing:
+    n_embd_wte: int = None
+
+    # weight tying
+    n_embd_wte_scale_tying: bool = True
+
+    # wte import/export
+    import_wte_freeze: bool = False
+    import_wte_npy: str = None
+    export_wte_npy: str = None
+    export_wte_each_eval: bool = False
+
+    # scaling matrices import/export
+    import_scale_matrices_freeze: bool = False
+    import_scale_matrices_npz: str = None
+    export_scale_matrices_npz: str = None
+    export_scale_matrices_each_eval: bool = False
+
     dropout: float = 0.0
     window_size: int = 128
     gate: bool = False
@@ -22,10 +51,12 @@ class GPTConfig:
     softmax_io_logging: bool = False
     consmax_beta_gamma_logging: bool = False
     plot_statistics: bool = False
+    softmax_io_log_interval: int = 1
 
     # Training options
     ## Gradient Checkpointing - More memory efficient (can do long contexts), but is slower
     use_gradient_checkpointing: bool = False
+    recompute_backward_pass: bool = False
 
     # MLP Options
     use_parallel_mlp: bool = False
@@ -97,8 +128,11 @@ class GPTConfig:
     ## Softplus options
     softplus_divisor: float = 256.0
 
-    ## Softplus options
+    ## ReLUMax options
     relumax_divisor: float = 256.0
+
+    ## SigmoidMax options
+    sigmoidmax_divisor: float = 256.0
 
     ## Squareplus options
     squareplus_divisor: float = 256.0
