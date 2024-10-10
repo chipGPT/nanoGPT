@@ -249,7 +249,10 @@ class CausalSelfAttention(nn.Module):
 
         # Softmax Variant Selection
         self.softmax_variant_attn = config.softmax_variant_attn
-        if self.softmax_variant_attn == "softmax":
+        if config.use_firelu:
+            self.flash = False
+            self.softmax_layer_attn = None
+        elif self.softmax_variant_attn == "softmax":
             # Enable flash attention, which is compatible with 'softmax'
             self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         else:
@@ -360,7 +363,7 @@ class CausalSelfAttention(nn.Module):
             # fire position embeddings
             if self.use_fire_embeddings is not None:
                 # add learned fire bias
-                att = att + self.fire_pos_enc(x)
+                att = self.fire_pos_enc(x, att)
 
             if self.quantization_attn_dict["quantize_attn_act_softmax_input"]:
                 num_bits = self.quantization_attn_dict["quantize_attn_act_softmax_input_bits"]
@@ -368,10 +371,11 @@ class CausalSelfAttention(nn.Module):
                 att = fake_quantize_act(self, "attn_act_softmax_input", att, num_bits, quant_method)
 
             # softmax variation
-            if self.softmax_variant_attn != 'softmax':
-                att = self.softmax_layer_attn(att)
-            else:
-                att = F.softmax(att, dim=-1)
+            if self.softmax_variant_attn is not None:
+                if self.softmax_variant_attn != 'softmax':
+                    att = self.softmax_layer_attn(att)
+                else:
+                    att = F.softmax(att, dim=-1)
 
             att = self.attn_dropout(att)
 

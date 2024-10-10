@@ -216,7 +216,10 @@ class FIRE(nn.Module):
         self.eps = eps
         self.fire_log_bias = config.fire_log_bias
 
-    def forward(self, x: torch.Tensor):
+        # Option to conditionally add bias based on the attn value
+        self.use_firelu = config.use_firelu
+
+    def forward(self, x: torch.Tensor, attn: torch.Tensor):
         seq_length = x.size(1)
         positions = torch.arange(seq_length, dtype=torch.float, device=x.device)
         rel_distance = positions[:, None] - positions[None, :]
@@ -237,5 +240,15 @@ class FIRE(nn.Module):
         fire_bias = self.mlp(normalized_distance.unsqueeze(-1))
         fire_bias = fire_bias.unsqueeze(0).permute(0, 3, 1, 2)
 
-        return fire_bias
+        # Option to only add fire_base to attention if result will be greater than 0
+        # This is equivalent to a ReLU operation after the FIRE operation
+        if self.use_firelu:
+            # Find where fire_bias <= -attn and set those elements to zero in the result
+            mask = fire_bias <= -attn
+            attn = torch.where(mask, torch.zeros_like(attn), attn + fire_bias)
+        else:
+            # Simply add the fire_bias to attn if no condition
+            attn = attn + fire_bias
+
+        return attn
 

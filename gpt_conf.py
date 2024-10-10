@@ -140,6 +140,7 @@ class GPTConfig:
     # Positional Embeddings Variations
     use_abs_pos_embeddings: bool = True # Note: one can use this AND rotary embeddings
     use_fire_embeddings: bool = False
+    use_firelu: bool = False
     shared_fire_embeddings: bool = False
     use_rotary_embeddings: bool = False
     sym_rot_num_angles: int = 512

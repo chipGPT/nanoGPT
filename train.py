@@ -274,6 +274,7 @@ def parse_args():
     model_group.add_argument('--use_abs_pos_embeddings', default=True, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--use_fire_embeddings', default=False, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--shared_fire_embeddings', default=False, action=argparse.BooleanOptionalAction)
+    model_group.add_argument('--use_firelu', default=False, action=argparse.BooleanOptionalAction, help="bypasses softmax attention, use fire + relu hybrid in causal attention block.")
 
     ## Positional Embedding Weight Initialization Options
     model_group.add_argument( "--embedding_mean_init", type=float, default=0.0)
