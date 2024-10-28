@@ -187,9 +187,89 @@ def get_num_bits(config):
     print(f"Total bits for quantized attention activations: {total_bits}")
     return total_bits
 
+def get_layer_bits(config):
+    """
+    Calculate the total number of bits used by quantized linear layer weights, embeddings, and LayerNorm parameters.
 
+    Parameters:
+    - config: dict containing all quantization-related configurations.
 
+    Returns:
+    - total_bits: float, total number of bits used by quantized weights and embeddings.
+    """
+    H = float(config.get("n_head", 6))
+    D = float(config.get("n_embd", 6))
+    D_ff = float(config.get("n_mlp", 4 * D))
+    V = float(config.get("vocab_size", 50257))
+    n_positions = float(config.get("n_positions", 1024))
+    n_layer = int(config.get("n_layer", 12))
 
+    default_bits = float(config.get("quantize_linear_weight_bits", 16))
+    default_full_precision_bits = float(config.get("default_full_precision_bits", 16))
+
+    total_bits = 0
+
+    # Include word embedding table (wte)
+    quantize_wte_bits = float(config.get("quantize_wte_bits", default_bits))
+    wte_shape = (V, D)  # Shape of the word embedding table
+    num_wte_params = wte_shape[0] * wte_shape[1]
+    wte_bits = num_wte_params * quantize_wte_bits
+    total_bits += wte_bits
+
+    # Include positional embedding table (wpe)
+    quantize_wpe_bits = float(config.get("quantize_wpe_bits", default_bits))
+    wpe_shape = (n_positions, D)  # Shape of the positional embedding table
+    num_wpe_params = wpe_shape[0] * wpe_shape[1]
+    wpe_bits = num_wpe_params * quantize_wpe_bits
+    total_bits += wpe_bits
+
+    # Include LayerNorm parameters
+    num_layernorms = (2 * n_layer) + 1
+    num_layernorm_params = num_layernorms * D
+    layernorm_bits = num_layernorm_params * default_full_precision_bits
+    total_bits += layernorm_bits
+
+    layer_names = [
+        "linear_attn_q",
+        "linear_attn_k",
+        "linear_attn_v",
+        "linear_attn_proj",
+        "linear_mlp_up",
+        "linear_mlp_down"
+    ]
+
+    weight_shapes = {
+        "linear_attn_q": (D, D),
+        "linear_attn_k": (D, D),
+        "linear_attn_v": (D, D),
+        "linear_attn_proj": (D, D),
+        "linear_mlp_up": (D, D_ff),
+        "linear_mlp_down": (D_ff, D)
+    }
+
+    for name in layer_names:
+        quantize_method_key = f"quantize_{name}_method"
+        quantize_bits_key = f"quantize_{name}_bits"
+
+        quantize_method = config.get(quantize_method_key, None)
+
+        if quantize_method is None:
+            quantize_bits = default_full_precision_bits
+        else:
+            quantize_bits = float(config.get(quantize_bits_key, default_bits))
+
+        shape = weight_shapes.get(name, (0, 0))
+        num_params_per_layer = shape[0] * shape[1]
+
+        num_layers = n_layer  # Number of transformer layers
+        total_params = num_params_per_layer * num_layers
+
+        layer_bits = total_params * quantize_bits
+
+        total_bits += layer_bits
+
+    print(f"Total bits for quantized linear layer weights, embeddings, and LayerNorm parameters: {total_bits}")
+    return total_bits
 
 def format_config_name(config, config_basename, add_names):
     if add_names:
