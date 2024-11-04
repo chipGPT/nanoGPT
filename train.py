@@ -213,7 +213,7 @@ def parse_args():
     # Quatization
 
     ## Quantization Method Options
-    quant_methods = ["symmetric_quant", "affine_quant", "stochastic_quant"]
+    quant_methods = ["symmetric_quant", "symmetric_quant_per_token", "symmetric_quant_per_channel", "affine_quant", "stochastic_quant"]
 
     ## WTE
     model_group.add_argument("--quantize_wte", default=None, action=argparse.BooleanOptionalAction, help="Whether the word embedding is quantized")

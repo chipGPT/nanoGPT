@@ -8,6 +8,53 @@ def set_dtype(bits):
     else:
         return torch.int8
     
+def symmetric_quantize_per_token(tensor, bits, causal_mask=False):
+    """
+    Symmetric quantization function per token
+    :param tensor: Tensor to be quantized
+    :param bits: Number of bits of quantization
+    :return: zero point, scale, quantized tensor
+    """
+    bit_max = (1 << (bits - 1)) - 1
+    bit_min = -bit_max - 1
+    if causal_mask:
+        # Apply torch.tril to get the lower triangular part (including diagonal)
+        lower_triangular = torch.tril(tensor)
+
+        # Find the maximum value
+        abs_max = lower_triangular.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
+    else:
+        abs_max = tensor.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
+    scale = abs_max / bit_max
+    xi_array = torch.round(tensor / scale)
+    clamped_array = torch.clamp(xi_array, min=bit_min, max=bit_max).to(dtype=set_dtype(bits))
+    return 0, scale, clamped_array
+
+def symmetric_quantize_per_channel(tensor, bits, causal_mask=False):
+    """
+    Symmetric quantization function per channel
+    :param tensor: Tensor to be quantized
+    :param bits: Number of bits of quantization
+    :param causal_mask: Whether to apply a causal mask (e.g., for attention matrices)
+    :return: zero point, scale, quantized tensor
+    """
+    bit_max = (1 << (bits - 1)) - 1
+    bit_min = -bit_max - 1
+
+    if causal_mask:
+        # Apply torch.tril to get the lower triangular part (including diagonal)
+        lower_triangular = torch.tril(tensor)
+        # Compute the maximum absolute value per channel over batch and sequence dimensions
+        abs_max = lower_triangular.abs().amax(dim=(0,1), keepdim=True).clamp(min=1e-5)
+    else:
+        # Compute the maximum absolute value per channel over batch and sequence dimensions
+        abs_max = tensor.abs().amax(dim=(0,1), keepdim=True).clamp(min=1e-5)
+
+    scale = abs_max / bit_max
+    xi_array = torch.round(tensor / scale)
+    clamped_array = torch.clamp(xi_array, min=bit_min, max=bit_max).to(dtype=set_dtype(bits))
+    return 0, scale, clamped_array
+
 def symmetric_quantize(tensor, bits, causal_mask=False):
     """
     Symmetric quantization function
@@ -148,6 +195,8 @@ class FakeLinearQuantizationFunction(torch.autograd.Function):
 
 quantize_dictionary = {
     "symmetric_quant": symmetric_quantize,
+    "symmetric_quant_per_token": symmetric_quantize_per_token,
+    "symmetric_quant_per_channel": symmetric_quantize_per_channel,
     "affine_quant": affine_quantize,
     "stochastic_quant": stochastic_quantize
 }
