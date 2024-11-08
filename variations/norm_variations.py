@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from quantization.quantize import quantize_dictionary, dequantize, create_activation_buffers
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -27,6 +28,44 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         rms = x.norm(2, dim=-1, keepdim=True) / math.sqrt(x.size(-1))
         return x / rms * self.gain
+    
+class RMSNormRecompute(nn.Module):
+    """RMS Normalization Recompute"""
+
+    def __init__(self, linear_variant, in_features, out_features, config):
+        super().__init__()
+        ndim = config.n_embd
+        assert ndim == in_features
+        self.gain = nn.Parameter(torch.ones(out_features))
+        self.linear = linear_variant
+        self.quantize_rmsnorm_recompute = config.quantize_rmsnorm_recompute
+        if self.quantize_rmsnorm_recompute:
+            self.quant_method = config.quantize_rmsnorm_recompute_method
+            self.num_bits = config.quantize_rmsnorm_recompute_bits
+            create_activation_buffers(self, "quantize_rmsnorm")
+
+    def forward(self, x):
+        # Merge the gain parameter into the weight
+        if not hasattr(self.linear, 'weight'):
+            raise ValueError("Linear variant doesn't have a weight parameter")
+        self.linear.weight.data = self.linear.weight * self.gain.view(-1, 1)
+
+        # Apply linear to input (multiply by weight)
+        x = self.linear(x)
+
+        if self.quantize_rmsnorm_recompute:
+            zero_point, scale, act = quantize_dictionary[self.quant_method](x, self.num_bits)
+            setattr(self, "rmsnorm", act)
+            setattr(self, "rmsnorm_scale", scale)
+            setattr(self, "rmsnorm_zero_point", zero_point)
+
+        rms = x.norm(2, dim=-1, keepdim=True) / math.sqrt(x.size(-1))
+        output = x / rms
+
+        if self.quantize_rmsnorm_recompute:
+            dequantize(zero_point, scale, output)
+
+        return output
 
 class pRMSNorm(nn.Module):
     """Partial RMS Normalization"""
@@ -136,4 +175,5 @@ norm_dictionary = {
     "rmsnorm": RMSNorm,
     "prmsnorm": pRMSNorm,
     "krmsnorm": kRMSNorm,
+    "rmsnorm_recompute": RMSNormRecompute
 }

@@ -1,5 +1,11 @@
 import torch
 
+def create_activation_buffers(obj, arg):
+    arg_str = arg.split("quantize_")[1]
+    obj.register_buffer(arg_str, None)
+    obj.register_buffer(f"{arg_str}_scale", None)
+    obj.register_buffer(f"{arg_str}_zero_point", None)
+
 def set_dtype(bits):
     if bits > 16:
         return torch.int32

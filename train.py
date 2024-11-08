@@ -164,7 +164,7 @@ def parse_args():
     model_group.add_argument('--shared_attn_sym', default=False, action=argparse.BooleanOptionalAction, help="symmetrical attention sharing")
 
     # NORM VARIATIONS
-    model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=["krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
+    model_group.add_argument("--norm_variant_attn", type=str, default="rmsnorm", choices=["krmsnorm", "prmsnorm", "rmsnorm", "rmsnorm_recompute", "layernorm"])
     model_group.add_argument("--norm_variant_output", type=str, default="rmsnorm", choices=["krmsnorm", "prmsnorm", "rmsnorm", "layernorm"])
     model_group.add_argument('--bias', default=False, action=argparse.BooleanOptionalAction, help="only used for layernorm variation option")
     model_group.add_argument("--prmsnorm_pct", default=0.0625, type=float, help="percentage (1 being 100 percent) of first entries used for partial rms" )
@@ -225,6 +225,11 @@ def parse_args():
     model_group.add_argument("--quantize_wpe", default=None, action=argparse.BooleanOptionalAction, help="Whether the word position embedding is quantized")
     model_group.add_argument("--quantize_wpe_method", type=str, default="affine_quant", choices=quant_methods, help="function used for position embedding quantization")
     model_group.add_argument("--quantize_wpe_bits", type=int, default=8, help="number of bits for position embedding quantization")
+
+    ## RMSNorm Recompute
+    model_group.add_argument("--quantize_rmsnorm_recompute", default=None, action=argparse.BooleanOptionalAction, help="Whether to quantize RMSNorm recompute: dequant(quant(x*W) * 1/RMS)")
+    model_group.add_argument("--quantize_rmsnorm_recompute_method", type=str, default="affine_quant", choices=quant_methods, help="function used for RMSNorm recompute quantization")
+    model_group.add_argument("--quantize_rmsnorm_recompute_bits", type=int, default=8, help="number of bits for RMSNorm recompute quantization")
 
     ## Activations
     model_group.add_argument("--activations_quant_method", type=str, default="affine_quant", choices=quant_methods, help="function used for quantization of activations")

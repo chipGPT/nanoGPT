@@ -214,6 +214,11 @@ class GPTConfig:
     quantize_wpe_method: str = "affine_quant"
     quantize_wpe_bits: int = 8
 
+    # RMSNorm Recompute Quantizations
+    quantize_rmsnorm_recompute: bool = False
+    quantize_rmsnorm_recompute_method: str = "affine_quant"
+    quantize_rmsnorm_recompute_bits: int = 8
+
     ## Activation Quantizations
     activations_quant_method: str = "affine_quant"
     quantize_attn_act: bool = False

@@ -34,7 +34,7 @@ from variations.position_encoding_variations import QuantizedEmbedding, RotaryEm
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
-from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
+from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act, create_activation_buffers
 
 def create_shared_param_group(layer_type, config):
 
@@ -101,12 +101,6 @@ def set_variant(variant, default_variant):
         return default_variant
     return variant
 
-def create_activation_buffers(obj, arg):
-    arg_str = arg.split("quantize_")[1]
-    obj.register_buffer(arg_str, None)
-    obj.register_buffer(f"{arg_str}_scale", None)
-    obj.register_buffer(f"{arg_str}_zero_point", None)
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
@@ -131,6 +125,8 @@ class CausalSelfAttention(nn.Module):
             elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_method"):
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_method)
 
+        self.norm_variant = config.norm_variant_attn
+
         self.linear_variant_q = linear_dictionary[set_variant(config.linear_variant_q, config.linear_variant_attn)]
         self.linear_variant_k = linear_dictionary[set_variant(config.linear_variant_k, config.linear_variant_attn)]
         self.linear_variant_v = linear_dictionary[set_variant(config.linear_variant_v, config.linear_variant_attn)]
@@ -138,6 +134,8 @@ class CausalSelfAttention(nn.Module):
 
         # key, query, value projections for all heads, but in a batch
         self.c_attn_q = self.linear_variant_q(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_q_method"], self.quantization_attn_dict["quantize_linear_attn_q_bits"], bias=config.bias)
+        if self.norm_variant == "rmsnorm_recompute":
+            self.norm_variant_c_attn_q = norm_dictionary[self.norm_variant](self.c_attn_q, config.n_embd, config.n_embd, config)
 
         self.n_head = config.n_head
         if config.n_kv_group == None:
@@ -148,7 +146,11 @@ class CausalSelfAttention(nn.Module):
 
         self.kv_dim = (config.n_embd // config.n_head) * self.n_kv_group
         self.c_attn_k = self.linear_variant_k(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_k_method"], self.quantization_attn_dict["quantize_linear_attn_k_bits"], bias=config.bias)
+        if self.norm_variant == "rmsnorm_recompute":
+            self.norm_variant_c_attn_k = norm_dictionary[self.norm_variant](self.c_attn_k, config.n_embd, self.kv_dim, config)
         self.c_attn_v = self.linear_variant_v(config.n_embd, self.kv_dim, config, self.quantization_attn_dict["quantize_linear_attn_v_method"], self.quantization_attn_dict["quantize_linear_attn_v_bits"], bias=config.bias)
+        if self.norm_variant == "rmsnorm_recompute":
+            self.norm_variant_c_attn_v = norm_dictionary[self.norm_variant](self.c_attn_v, config.n_embd, self.kv_dim, config)
         self.c_proj = self.linear_variant_attn_proj(config.n_embd, config.n_embd, config, self.quantization_attn_dict["quantize_linear_attn_proj_method"], self.quantization_attn_dict["quantize_linear_attn_proj_bits"], bias=config.bias)
 
         # Regularization
@@ -296,9 +298,14 @@ class CausalSelfAttention(nn.Module):
             quant_method = self.quantization_attn_dict["activations_quant_method"]
             x = fake_quantize_act(self, "attn_act_input", x, num_bits, quant_method)
 
-        q = self.c_attn_q(x)
-        k = self.c_attn_k(x)
-        v = self.c_attn_v(x)
+        if self.norm_variant == "rms_recompute":
+            q = self.norm_variant_c_attn_q(x)
+            k = self.norm_variant_c_attn_k(x)
+            v = self.norm_variant_c_attn_v(x)
+        else:
+            q = self.c_attn_q(x)
+            k = self.c_attn_k(x)
+            v = self.c_attn_v(x)
 
         if self.window_size is not None:
             if self.use_flex_attn is not None:
@@ -457,14 +464,21 @@ class MLP(nn.Module):
                 elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_method"):
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_method)
 
+            self.norm_variant = config.norm_variant_attn
+
             # Instantiate Linear Layers
             if self.mlp_variant == "mlp":
                 self.c_fc = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], bias=config.bias)
                 self.c_proj = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], bias=config.bias)
+                if self.norm_variant == "rmsnorm_recompute":
+                    self.norm_variant_c_fc = norm_dictionary[self.norm_variant](self.c_fc, config.n_embd, config.mlp_expansion_factor * config.n_embd, config)
             elif self.mlp_variant == "swiglu":
                 self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
                 self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
                 self.c_fc_out = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
+                if self.norm_variant == "rmsnorm_recompute":
+                    self.norm_variant_c_fc_in1 = norm_dictionary[self.norm_variant](self.c_fc_in1, config.n_embd, config.mlp_expansion_factor * config.n_embd, config)
+                    self.norm_variant_c_fc_in2 = norm_dictionary[self.norm_variant](self.c_fc_in2, config.n_embd, config.mlp_expansion_factor * config.n_embd, config)
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -478,7 +492,10 @@ class MLP(nn.Module):
             x = self.kan(x)
 
         elif self.mlp_variant == "mlp":
-            x = self.c_fc(x)
+            if self.norm_variant == "rmsnorm_recompute":
+                x = self.norm_variant_c_fc(x)
+            else:
+                x = self.c_fc(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
                 num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
@@ -495,7 +512,10 @@ class MLP(nn.Module):
             x = self.c_proj(x)
 
         elif self.mlp_variant == "swiglu":
-            x_in1 = self.c_fc_in1(x)
+            if self.norm_variant == "rmsnorm_recompute":
+                x_in1 = self.norm_variant_c_fc_in1(x)
+            else:
+                x_in1 = self.c_fc_in1(x)
 
             if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
                 num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
@@ -509,7 +529,10 @@ class MLP(nn.Module):
                 quant_method = self.quantization_mlp_dict["activations_quant_method"]
                 x_in1 = fake_quantize_act(self, "mlp_act_activation_output", x_in1, num_bits, quant_method)
 
-            x_in2 = self.c_fc_in2(x)
+            if self.norm_variant == "rmsnorm_recompute":
+                x_in2 = self.norm_variant_c_fc_in2(x)
+            else:
+                x_in2 = self.c_fc_in2(x)
             x_out = x_in1 * x_in2
             x = self.c_fc_out(x_out)
 
@@ -526,9 +549,11 @@ class Block(nn.Module):
         super().__init__()
 
         # Initialize and set attn normalization (e.g. rmsnorm)
-        norm_variant_attn = norm_dictionary[config.norm_variant_attn]
-        self.ln_1 = norm_variant_attn(config)
-        if not config.use_parallel_mlp:
+        self.norm_variant = config.norm_variant_attn
+        norm_variant_attn = norm_dictionary[self.norm_variant]
+        if self.norm_variant != "rmsnorm_recompute":
+            self.ln_1 = norm_variant_attn(config)
+        if (self.norm_variant != "rmsnorm_recompute") and (not config.use_parallel_mlp):
             self.ln_2 = norm_variant_attn(config)
 
         self.use_post_ln = config.use_post_ln
@@ -558,11 +583,18 @@ class Block(nn.Module):
                     x = self.ln_2(x + self.mlp(x))
             else:
                 if self.use_parallel_mlp:
-                    ln_1 = self.ln_1(x)
-                    x = x + self.attn(ln_1) + self.mlp(ln_1)
+                    if self.norm_variant == "rmsnorm_recompute":
+                        x = x + self.attn(x) + self.mlp(x)
+                    else:
+                        ln_1 = self.ln_1(x)
+                        x = x + self.attn(ln_1) + self.mlp(ln_1)
                 else:
-                    x = x + self.attn(self.ln_1(x))
-                    x = x + self.mlp(self.ln_2(x))
+                    if self.norm_variant == "rmsnorm_recompute":
+                        x = x + self.attn(x)
+                        x = x + self.mlp(x)
+                    else:
+                        x = x + self.attn(self.ln_1(x))
+                        x = x + self.mlp(self.ln_2(x))
             return x
 
         if self.use_gradient_checkpointing and x.requires_grad:
