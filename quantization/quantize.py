@@ -122,6 +122,8 @@ def dequantize(zero_point, scale, tensor, causal_mask=False):
 
 def fake_quantize_act(obj, activation, tensor, num_bits, quant_method, causal_mask=False):
     zero_point, scale, act = quantize_dictionary[quant_method](tensor, num_bits, causal_mask=causal_mask)
+    if not obj.training and (obj.evaluation_iter % 400 == 0):
+        print(f"sample 10 values from {activation}: {act[(0,) * (act.ndim - 1) + (slice(10),)]}")
     setattr(obj, activation, act)
     setattr(obj, f"{activation}_scale", scale)
     setattr(obj, f"{activation}_zero_point", zero_point)

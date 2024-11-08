@@ -22,6 +22,7 @@ class QuantizedLinear(nn.Linear):
 
         self.weight_bits = bits
         self.quant_method = method
+        self.evaluation_iter = 0
 
         if self.weight_bits < 1:
             raise ValueError(f"weight_bits={self.weight_bits} must be higher than 0 ")
@@ -76,6 +77,9 @@ class QuantizedLinear(nn.Linear):
         """Sets the model for inference by quantizing the model"""
         self.weight_zero_point[0], self.weight_norm, self.quantized_weight = quantize_dictionary[self.quant_method](self.weight, self.weight_bits)
 
+        if self.evaluation_iter % 400 == 0:
+            print(f"sample 10 values from QuantizedLinear: {self.quantized_weight[(0,) * (self.quantized_weight.ndim - 1) + (slice(10),)]}")
+
         if self.bias is not None:
             self.bias_zero_point[0], self.bias_norm, self.quantized_bias = quantize_dictionary[self.quant_method](self.bias, self.accumulation_bits)
 
@@ -88,6 +92,7 @@ class QuantizedLinear(nn.Linear):
                 out = super().forward(input)
             self._step += 1
         else:
+            self.evaluation_iter += 1
             # Prepares the model for inference by quantizing weights and bias
             self._eval()
             # Uses quantized weights and bias to compute the output
