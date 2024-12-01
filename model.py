@@ -13,6 +13,7 @@ import sys
 import re
 from rich import print
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+from performer_pytorch import FastAttention
 
 import numpy as np
 
@@ -240,6 +241,15 @@ class CausalSelfAttention(nn.Module):
             self.flash = False
             print("flash attention removed due to FIRE")
 
+        self.performer_attn = None
+        if config.attn_variant == "performer":
+            self.performer_attn = FastAttention(
+                    dim_heads = config.n_embd // config.n_head,
+                    nb_features = config.performer_features,
+                    causal = True
+                    )
+            self.flash = False
+
         # Can't use flash attention if we want to manually quantize most input/output activations in attn
         for key, val in self.quantization_attn_dict.items():
             if key.startswith("quantize_") and val == True:
@@ -350,6 +360,8 @@ class CausalSelfAttention(nn.Module):
         elif self.use_flex_attn and self.window_size is not None:
             block_mask = self.get_block_mask(T, x.device)
             y = torch.nn.attention.flex_attention.flex_attention(q, k, v, block_mask=block_mask)
+        elif self.performer_attn is not None:
+            y = self.performer_attn(q, k, v)
         else:
             if self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input"]:
                 num_bits = self.quantization_attn_dict["quantize_attn_act_qk_mult_q_input_bits"]

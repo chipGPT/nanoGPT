@@ -56,6 +56,10 @@ class GPTConfig:
     moe_top_k: int = 2
     moe_router_scheme: str = "softmax"
 
+    # Attention Variations
+    attn_variant: str = None
+    performer_features: int = 256
+
     # Logging options
     softmax_io_logging: bool = False
     consmax_beta_gamma_logging: bool = False
