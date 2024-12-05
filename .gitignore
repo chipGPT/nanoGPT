@@ -17,3 +17,6 @@ out*/
 .aider*
 
 venv/*
+
+# generated analysis
+checkpoint_analysis/images/

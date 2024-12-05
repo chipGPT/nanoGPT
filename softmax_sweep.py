@@ -86,7 +86,7 @@ for variant in softmax_variants:
                 softmax_variant_attn = variant,
                 disable_flash_attention = True,
                 strongermax_use_xmax = True,
-                strongermax_div_by_sum_of_terms= = True,
+                strongermax_div_by_sum_of_terms = True,
                 dropout = 0, # for determinism
                 bias = bias,
             )

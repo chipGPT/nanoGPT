@@ -29,12 +29,16 @@ import torch.utils.checkpoint as checkpoint
 # Variations
 from variations.lsv_variations import lsv_dictionary
 from variations.softmax_variations import softmax_dictionary
+from variations.mlp_variations import MLP
+from variations.moe_variations import MoELayer
 from variations.norm_variations import norm_dictionary
 from variations.position_encoding_variations import QuantizedEmbedding, RotaryEmbedding, SymmetricalOverlapAngularPositions, FIRE
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
+
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
+from quantization.quant_utils import set_variant, create_activation_buffers
 
 def create_shared_param_group(layer_type, config):
 
@@ -95,17 +99,6 @@ def create_shared_param_group(layer_type, config):
                     return shared_group
     return shared_group
 
-def set_variant(variant, default_variant):
-    # If variant is false or None, then set to provided default value
-    if not variant:
-        return default_variant
-    return variant
-
-def create_activation_buffers(obj, arg):
-    arg_str = arg.split("quantize_")[1]
-    obj.register_buffer(arg_str, None)
-    obj.register_buffer(f"{arg_str}_scale", None)
-    obj.register_buffer(f"{arg_str}_zero_point", None)
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
@@ -426,119 +419,11 @@ class CausalSelfAttention(nn.Module):
 
         return y
 
-
-class MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        self.full_quant_iteration = config.full_quant_iteration
-        self.eval_interval = config.eval_interval
-
-        # Select "mlp variant"
-        self.mlp_variant = config.mlp_variant
-
-        self.start_quant_level = config.start_quant_level
-        self.quant_scheduler = config.quant_scheduler
-
-        # If "MLP Variant" is KAN, then we skip MLP specific items
-        if self.mlp_variant == "kan":
-            self.kan = linear_dictionary["kan"](config.n_embd, config.n_embd, config=config)
-        else:
-            # Select activation variant
-            self.activation_variant = activation_dictionary[config.activation_variant](config=config)
-
-            # Sets the class of linear for MLP
-            self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
-            self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
-
-            self.quantization_mlp_dict = {}
-            self.quantization_mlp_dict["activations_quant_method"] = config.activations_quant_method
-
-            # Set quantization parameters for MLP
-            for arg, val in vars(config).items():
-                # Set MLP Activation precision and quantization method
-                if arg.startswith("quantize_") and "mlp_act" in arg and arg.endswith("_bits"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act_bits)
-                elif arg.startswith("quantize_") and "mlp_act" in arg:
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act)
-                    if config.store_activations and arg != "quantize_mlp_act" and self.quantization_mlp_dict[arg]:
-                        create_activation_buffers(self, arg)
-                # Set MLP Linear Weight precision and quantization method
-                elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_bits"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_bits)
-                elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_method"):
-                    self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_method)
-
-            # Instantiate Linear Layers
-            if self.mlp_variant == "mlp":
-                self.c_fc = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"], bias=config.bias)
-                self.c_proj = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"], bias=config.bias)
-            elif self.mlp_variant == "swiglu":
-                self.c_fc_in1 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-                self.c_fc_in2 = self.linear_variant_mlp_up(config.n_embd, config.mlp_expansion_factor * config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_up_method"], self.quantization_mlp_dict["quantize_linear_mlp_up_bits"])
-                self.c_fc_out = self.linear_variant_mlp_down(config.mlp_expansion_factor * config.n_embd, config.n_embd, config, self.quantization_mlp_dict["quantize_linear_mlp_down_method"], self.quantization_mlp_dict["quantize_linear_mlp_down_bits"])
-
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x, iter_num):
-
-        if self.quantization_mlp_dict["quantize_mlp_act_input"]:
-            num_bits = self.quantization_mlp_dict["quantize_mlp_act_input_bits"]
-            quant_method = self.quantization_mlp_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "mlp_act_input", x, num_bits, quant_method, iter_num)
-
-        if self.mlp_variant == "kan":
-            x = self.kan(x)
-
-        elif self.mlp_variant == "mlp":
-            x = self.c_fc(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_input", x, num_bits, quant_method, iter_num)
-
-            x = self.activation_variant(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x = fake_quantize_act(self, "mlp_act_activation_output", x, num_bits, quant_method, iter_num)
-
-            x = self.c_proj(x)
-
-        elif self.mlp_variant == "swiglu":
-            x_in1 = self.c_fc_in1(x)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_input"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_input_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_input", x_in1, num_bits, quant_method, iter_num)
-
-            x_in1 = self.activation_variant(x_in1)
-
-            if self.quantization_mlp_dict["quantize_mlp_act_activation_output"]:
-                num_bits = self.quantization_mlp_dict["quantize_mlp_act_activation_output_bits"]
-                quant_method = self.quantization_mlp_dict["activations_quant_method"]
-                x_in1 = fake_quantize_act(self, "mlp_act_activation_output", x_in1, num_bits, quant_method, iter_num)
-
-            x_in2 = self.c_fc_in2(x)
-            x_out = x_in1 * x_in2
-            x = self.c_fc_out(x_out)
-
-        x = self.dropout(x)
-
-        if self.quantization_mlp_dict["quantize_mlp_act_output"]:
-            num_bits = self.quantization_mlp_dict["quantize_mlp_act_output_bits"]
-            quant_method = self.quantization_mlp_dict["activations_quant_method"]
-            x = fake_quantize_act(self, "mlp_act_output", x, num_bits, quant_method, iter_num)
-        return x
-
 class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
         super().__init__()
 
-        # Initialize and set attn normalization (e.g. rmsnorm)
+        # Initialize and set attention normalization (e.g., LayerNorm, RMSNorm)
         norm_variant_attn = norm_dictionary[config.norm_variant_attn]
         self.ln_1 = norm_variant_attn(config)
         if not config.use_parallel_mlp:
@@ -548,13 +433,13 @@ class Block(nn.Module):
         self.use_parallel_mlp = config.use_parallel_mlp
         self.use_gradient_checkpointing = config.use_gradient_checkpointing
 
-        # Allow for sharing attn between blocks
+        # Allow for sharing attention layers between blocks
         if attn is None:
             self.attn = CausalSelfAttention(config)
         else:
             self.attn = attn
 
-        # Allow for sharing mlp between blocks
+        # Allow for sharing MLP layers between blocks
         if mlp is None:
             self.mlp = MLP(config)
         else:
@@ -564,21 +449,28 @@ class Block(nn.Module):
         def custom_forward(*inputs):
             x = inputs[0]
             if self.use_post_ln:
+                # Post-Layer Normalization
                 if self.use_parallel_mlp:
+                    # Parallel MLP and Attention
                     x = self.ln_1(x + self.attn(x, iter_num) + self.mlp(x, iter_num))
                 else:
+                    # Sequential MLP and Attention
                     x = self.ln_1(x + self.attn(x, iter_num))
                     x = self.ln_2(x + self.mlp(x, iter_num))
             else:
+                # Pre-Layer Normalization
                 if self.use_parallel_mlp:
+                    # Parallel MLP and Attention
                     ln_1 = self.ln_1(x)
                     x = x + self.attn(ln_1, iter_num) + self.mlp(ln_1, iter_num)
                 else:
+                    # Sequential MLP and Attention
                     x = x + self.attn(self.ln_1(x), iter_num)
                     x = x + self.mlp(self.ln_2(x), iter_num)
             return x
 
         if self.use_gradient_checkpointing and x.requires_grad:
+            # gradient checkpointing to save memory
             return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
         else:
             return custom_forward(x)
@@ -1090,51 +982,3 @@ class GPT(nn.Module):
 
         return idx, generated_text
 
-
-class MoELayer(nn.Module):
-    """ Mixture of Experts layer to replace FFN (or every other FFN) """
-
-    def __init__(self, config):
-        super().__init__()
-        self.top_k = config.moe_top_k
-        # TODO: implement expert capacity throttling
-        # self.expert_capacity = config.expert_capacity
-        self.num_experts = config.n_experts
-        self.router = router_dictionary[config.moe_router_scheme](config)
-        self.experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
-
-    def forward(self, x):
-        # Assuming x has shape [batch_size, seq_len, n_embd]
-        batch_size, seq_len, _ = x.shape
-        gating_output, indices = self.router(x)
-        # print(f"gating_output.shape: {gating_output.shape}")
-        # print(f"indices 1 count: {indices}")
-        final_output = torch.zeros_like(x)
-
-        # Flatten the batch and sequence dimensions to treat each token independently
-        flat_x = x.view(-1, x.size(-1))
-        # print(f"x.shape() = {x.shape}")
-        # print(f"flat_x = {flat_x.shape}")
-        flat_gating_output = gating_output.view(-1, gating_output.size(-1))
-        # print(f"flat_gating_output.shape = {flat_gating_output.shape}")
-
-        # Process each expert in parallel
-        for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k
-            expert_mask = (indices == i).any(dim=-1)
-            flat_mask = expert_mask.view(-1)
-            # print(f"expert_mask shape = {expert_mask.shape}")
-            # print(f"flat_mask shape = {flat_mask.shape}")
-
-            if flat_mask.any():
-                expert_input = flat_x[flat_mask]
-                expert_output = expert(expert_input)
-
-                # Extract and apply gating scores
-                gating_scores = flat_gating_output[flat_mask, i].unsqueeze(1)
-                weighted_output = expert_output * gating_scores
-
-                # Update final output additively by indexing and adding
-                final_output[expert_mask] += weighted_output.squeeze(1)
-        # print(f"final_output.shape = {final_output.shape}\n")
-        return final_output
