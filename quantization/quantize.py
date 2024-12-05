@@ -7,16 +7,7 @@ def set_dtype(bits):
         return torch.int16
     else:
         return torch.int8
-    
-def ternary_quantize(tensor, bits, causal_mask=False):
-    if causal_mask:
-        lower_triangular = torch.tril(tensor)
-        scale = lower_triangular.abs().mean().clamp(min=1e-5)
-    else:
-        scale = tensor.abs().mean().clamp(min=1e-5)
-    result = (tensor / scale).round().clamp(-1, 1).to(dtype=torch.int8)
-    return torch.tensor([0], device=tensor.device), scale, result
-    
+
 def calculate_quant_level(training, quant_scheduler, start_quant_level, full_quant_iter, iter_num):
     if full_quant_iter == None:
         raise ValueError("Full quant iteration was not specified.")
@@ -28,7 +19,31 @@ def calculate_quant_level(training, quant_scheduler, start_quant_level, full_qua
         return start_quant_level
     elif quant_scheduler == "linear":
         return min(iter_num / full_quant_iter + (full_quant_iter * start_quant_level), 1)
-    
+
+def ternary_quantize(tensor, bits, causal_mask=False):
+    if causal_mask:
+        lower_triangular = torch.tril(tensor)
+        scale = lower_triangular.abs().mean().clamp(min=1e-5)
+    else:
+        scale = tensor.abs().mean().clamp(min=1e-5)
+    result = (tensor / scale).round().clamp(-1, 1).to(dtype=torch.int8)
+    return torch.tensor([0], device=tensor.device), scale, result
+
+def static_quantize(tensor, scale, zero_point, bits, causal_mask=False):
+    """
+    Static quantization function
+    :param tensor: Tensor to be quantized
+    :param scale: Saved scale value
+    :param zero_point: Saved zero point value
+    :param bits: Number of bits of quantization
+    :return: zero point, scale, quantized tensor
+    """
+    bit_max = (1 << (bits - 1)) - 1
+    bit_min = -bit_max - 1
+    xi_array = torch.round(tensor / scale) + zero_point
+    clamped_array = torch.clamp(xi_array, min=bit_min, max=bit_max).to(dtype=set_dtype(bits))
+    return zero_point, scale, clamped_array
+
 def symmetric_quantize(tensor, bits, causal_mask=False):
     """
     Symmetric quantization function
@@ -125,11 +140,16 @@ def dequantize(zero_point, scale, tensor, causal_mask=False):
     dequantized = (tensor - zero_point) * scale
     return dequantized
 
-def fake_quantize_act(obj, activation, tensor, num_bits, quant_method, iter_num, causal_mask=False):
-    zero_point, scale, act = quantize_dictionary[quant_method](tensor, num_bits, causal_mask=causal_mask)
-    setattr(obj, activation, act)
-    setattr(obj, f"{activation}_scale", scale)
-    setattr(obj, f"{activation}_zero_point", zero_point)
+def fake_quantize_act(obj, activation, tensor, num_bits, quant_method, causal_mask=False):
+    if (not obj.training) and obj.static_eval_scales:
+        zero_point, scale, act = static_quantize(tensor, getattr(obj, f"{activation}_scale"), getattr(obj, f"{activation}_zero_point"), num_bits, causal_mask=causal_mask)
+    else:
+        zero_point, scale, act = quantize_dictionary[quant_method](tensor, num_bits, causal_mask=causal_mask)
+        if obj.training:
+            setattr(obj, activation, act)
+            setattr(obj, f"{activation}_scale", scale)
+            setattr(obj, f"{activation}_zero_point", zero_point)
+            
     dequantized = dequantize(zero_point, scale, act, causal_mask=causal_mask)
     if causal_mask:
         # Create a mask for the upper triangular part
@@ -193,6 +213,7 @@ class FakeLinearQuantizationFunction(torch.autograd.Function):
 
 quantize_dictionary = {
     "ternary_quant": ternary_quantize,
+    "static_quant": static_quantize,
     "symmetric_quant": symmetric_quantize,
     "affine_quant": affine_quantize,
     "stochastic_quant": stochastic_quantize

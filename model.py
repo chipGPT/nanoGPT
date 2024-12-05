@@ -35,6 +35,7 @@ from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
+from quantization.activation_buffer import create_activation_buffers, create_attn_buffer_dict, create_mlp_buffer_dict
 
 def create_shared_param_group(layer_type, config):
 
@@ -101,16 +102,11 @@ def set_variant(variant, default_variant):
         return default_variant
     return variant
 
-def create_activation_buffers(obj, arg):
-    arg_str = arg.split("quantize_")[1]
-    obj.register_buffer(arg_str, None)
-    obj.register_buffer(f"{arg_str}_scale", None)
-    obj.register_buffer(f"{arg_str}_zero_point", None)
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, fire_pos_enc=None):
         super().__init__()
 
+        self.static_eval_scales = config.static_eval_scales
         self.full_quant_iteration = config.full_quant_iteration
         self.eval_interval = config.eval_interval
         self.start_quant_level = config.start_quant_level
@@ -121,6 +117,9 @@ class CausalSelfAttention(nn.Module):
         else:
             assert config.n_embd % config.n_kv_group == 0
 
+        if config.store_activations:
+            quant_attn_buffer_dict = create_attn_buffer_dict(config.batch_size, config.block_size, config.n_embd, config.n_head, config.n_kv_group)
+
         self.quantization_attn_dict = {}
         self.quantization_attn_dict["activations_quant_method"] = config.activations_quant_method
         for arg, val in vars(config).items():
@@ -130,7 +129,7 @@ class CausalSelfAttention(nn.Module):
             elif arg.startswith("quantize_") and "attn_act" in arg:
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_attn_act)
                 if config.store_activations and arg != "quantize_attn_act" and self.quantization_attn_dict[arg]:
-                    create_activation_buffers(self, arg)
+                    create_activation_buffers(self, arg, quant_attn_buffer_dict)
             # Set each attention Linear precision and method
             elif arg.startswith("quantize_") and "linear_attn" in arg and arg.endswith("_bits"):
                 self.quantization_attn_dict[arg] = set_variant(val, config.quantize_linear_bits)
@@ -431,14 +430,16 @@ class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        # Quantization Related
         self.full_quant_iteration = config.full_quant_iteration
-        self.eval_interval = config.eval_interval
-
+        self.eval_interval = config.eval_interval # print quantization level at eval
+        self.static_eval_scales = config.static_eval_scales
+        self.start_quant_level = config.start_quant_level
+        self.quant_scheduler = config.quant_scheduler
+        
         # Select "mlp variant"
         self.mlp_variant = config.mlp_variant
 
-        self.start_quant_level = config.start_quant_level
-        self.quant_scheduler = config.quant_scheduler
 
         # If "MLP Variant" is KAN, then we skip MLP specific items
         if self.mlp_variant == "kan":
@@ -451,6 +452,9 @@ class MLP(nn.Module):
             self.linear_variant_mlp_up = linear_dictionary[set_variant(config.linear_variant_mlp_up, config.linear_variant_mlp)]
             self.linear_variant_mlp_down = linear_dictionary[set_variant(config.linear_variant_mlp_down, config.linear_variant_mlp)]
 
+            if config.store_activations:
+                quant_mlp_buffer_dict = create_mlp_buffer_dict(config.batch_size, config.block_size, config.n_embd, config.mlp_expansion_factor)
+
             self.quantization_mlp_dict = {}
             self.quantization_mlp_dict["activations_quant_method"] = config.activations_quant_method
 
@@ -462,7 +466,7 @@ class MLP(nn.Module):
                 elif arg.startswith("quantize_") and "mlp_act" in arg:
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_mlp_act)
                     if config.store_activations and arg != "quantize_mlp_act" and self.quantization_mlp_dict[arg]:
-                        create_activation_buffers(self, arg)
+                        create_activation_buffers(self, arg, quant_mlp_buffer_dict)
                 # Set MLP Linear Weight precision and quantization method
                 elif arg.startswith("quantize_") and "linear_mlp" in arg and arg.endswith("_bits"):
                     self.quantization_mlp_dict[arg] = set_variant(val, config.quantize_linear_bits)

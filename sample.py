@@ -44,6 +44,7 @@ def parse_args():
     parser.add_argument('--rope_length', type=int, default=None, help="Number of embeddings to rotate (must be an even number <= total embedding size)")
     parser.add_argument('--token_boundary', type=str, default=None, help="optional separator between emitted tokens")
     parser.add_argument('--print_model_info', default=True, action=argparse.BooleanOptionalAction, help="print info about model before infernece")
+    parser.add_argument("--static_eval_scales", default=None, action=argparse.BooleanOptionalAction, help="Whether the scales and zero points will be static during evaluation")
 
     # Steering Vector Related
     parser.add_argument('--save_avg_vector', type=str, default=None, help="Path to save the average vector of the start text to an .npy file")
@@ -209,6 +210,9 @@ def main():
         ckpt_path = os.path.join(args.out_dir, 'ckpt.pt')
         checkpoint = torch.load(ckpt_path, map_location=args.device)
         checkpoint['model_args']['dropout'] = 0.0
+        if args.static_eval_scales:
+            checkpoint['model_args']['static_eval_scales'] = args.static_eval_scales
+
         if args.save_avg_vector:
             print(f"saving {args.save_avg_vector}")
             checkpoint['model_args']['obtain_vector_at_layer_idx'] = args.apply_to_layer_idx
@@ -238,7 +242,7 @@ def main():
         if args.quantization_data_file:
             save_quantized_data(state_dict, args.quantization_data_file)
 
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict)
 
     else:
         # Need to create a completely "default" GPTConfig and overwrite using model_variations

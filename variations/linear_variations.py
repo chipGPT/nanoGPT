@@ -12,43 +12,55 @@ class WrappedLinear(nn.Linear):
         super(WrappedLinear, self).__init__(in_features, out_features, bias)
 
 class QuantizedLinear(nn.Linear):
-    """Linear layer with quantization aware training capability
-    Source: https://github.com/Alexstrasza98/Transformer-Quantization/blob/main
-    Source License: MIT
-    """
+    """Linear layer with quantization aware training capability"""
 
     def __init__(self, in_features, out_features, config=None, method="affine_quant", bits=8, bias=True):
         super().__init__(in_features, out_features, bias)
 
         self.weight_bits = bits
         self.quant_method = method
+        self.static_eval_scales = config.static_eval_scales
+        
         self.start_quant_level = config.start_quant_level
         self.quant_scheduler = config.quant_scheduler
         self.full_quant_iteration = config.full_quant_iteration
         self.eval_interval = config.eval_interval
 
         if self.weight_bits < 1:
-            raise ValueError(f"weight_bits={self.weight_bits} must be higher than 0 ")
+            raise ValueError(f"weight_bits={self.weight_bits} must be higher than 0")
 
         self.warmup_step = config.quantization_warmup_iters
         self.accumulation_bits = 32
 
         # Placeholder for quantized weights during training
         self._fake_quantized_weight = None
-        if bias == True:
-            self.register_buffer("quantized_bias", None)
-            self.register_buffer("bias_norm", None)
+
+        if bias:
+            self.register_buffer("quantized_bias", torch.zeros_like(self.bias))
+            self.register_buffer("bias_norm", torch.tensor(0.0))
             self.register_buffer("bias_zero_point", torch.tensor([0]))
+        else:
+            self.quantized_bias = None
 
         self.register_buffer("_step", torch.zeros(1))
 
-        self.register_buffer("quantized_weight", None)
-        self.register_buffer("weight_norm", None)
+        self.register_buffer("quantized_weight", torch.zeros_like(self.weight))
+        self.register_buffer("weight_norm", torch.tensor(0.0))
         self.register_buffer("weight_zero_point", torch.tensor([0]))
 
     def training_quantized_forward(self, input):
-        """Fake quantizes weights. Function should only be used while training"""
+        """Fake quantizes weights. Should only be used during training."""
         assert self.training, "Should be called only during training"
+
+        # Update buffers during training
+        self.weight_zero_point[0], self.weight_norm, self.quantized_weight = quantize_dictionary[self.quant_method](
+            self.weight, self.weight_bits
+        )
+
+        if self.bias is not None:
+            self.bias_zero_point[0], self.bias_norm, self.quantized_bias = quantize_dictionary[self.quant_method](
+                self.bias, self.accumulation_bits
+            )
 
         # Applies the fake quantization to the weights
         self._fake_quantized_weight = _fake_quantize(self.weight, self.training, self.quant_scheduler, self.start_quant_level, self.full_quant_iteration, self.eval_interval, self._step.item(), self.weight_bits, self.quant_method)
@@ -58,33 +70,38 @@ class QuantizedLinear(nn.Linear):
         return out
 
     def inference_quantized_forward(self, input):
-        """Simulate quantized inference. Function should be called only during inference"""
+        """Simulate quantized inference. Should be called only during inference."""
         assert not self.training, "Should be called only during inference"
 
-        # Compute the dequantized weight
-        weight = dequantize(self.weight_zero_point[0], self.weight_norm, self.quantized_weight)
+        if self.static_eval_scales:
+            # Use existing buffers without recalculating
+            weight = dequantize(self.weight_zero_point[0], self.weight_norm, self.quantized_weight)
+            if self.bias is not None:
+                bias = dequantize(self.bias_zero_point[0], self.bias_norm, self.quantized_bias)
+            else:
+                bias = None
+        else:
+            # Recalculate scale and zero point (without updating buffers)
+            weight_zero_point, weight_norm, quantized_weight = quantize_dictionary[self.quant_method](
+                self.weight, self.weight_bits
+            )
+            weight = dequantize(weight_zero_point, weight_norm, quantized_weight)
 
-        # Compute the dequantized bias
-        if self.bias is not None:
-            bias = dequantize(self.bias_zero_point[0], self.bias_norm, self.quantized_bias)
+            if self.bias is not None:
+                bias_zero_point, bias_norm, quantized_bias = quantize_dictionary[self.quant_method](
+                    self.bias, self.accumulation_bits
+                )
+                bias = dequantize(bias_zero_point, bias_norm, quantized_bias)
+            else:
+                bias = None
 
         # Uses the dequantized weights and bias to compute the output using F.linear
-        if self.bias:
-            out = F.linear(input, weight, bias)
-        else:
-            out = F.linear(input, weight)
+        out = F.linear(input, weight, bias)
 
         return out
 
-    def _eval(self):
-        """Sets the model for inference by quantizing the model"""
-        self.weight_zero_point[0], self.weight_norm, self.quantized_weight = quantize_dictionary[self.quant_method](self.weight, self.weight_bits)
-
-        if self.bias is not None:
-            self.bias_zero_point[0], self.bias_norm, self.quantized_bias = quantize_dictionary[self.quant_method](self.bias, self.accumulation_bits)
-
     def forward(self, input):
-        """Passes the input through the model during training and inference"""
+        """Passes the input through the model during training and inference."""
         if self.training:
             if self._step > self.warmup_step:
                 out = self.training_quantized_forward(input)
@@ -92,9 +109,6 @@ class QuantizedLinear(nn.Linear):
                 out = super().forward(input)
             self._step += 1
         else:
-            # Prepares the model for inference by quantizing weights and bias
-            self._eval()
-            # Uses quantized weights and bias to compute the output
             out = self.inference_quantized_forward(input)
         return out
 

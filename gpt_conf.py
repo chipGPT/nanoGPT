@@ -243,6 +243,10 @@ class GPTConfig:
     linear_std_init: float= 0.02
 
     # Quantizations
+    static_eval_scales: bool = False
+    # batch size needed for activation saving during training
+    batch_size: int = 64
+
     start_quant_level: float = 0
     quant_scheduler: str = None
     full_quant_iteration: int = None
