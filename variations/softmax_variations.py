@@ -208,12 +208,12 @@ class Strongermax(nn.Module):
 
         # Set optional temperature (already divided by sqrt head dimension)
         self.use_learned_temperature_factor = config.strongermax_use_learned_temperature_factor
-
         if self.use_learned_temperature_factor:
             self.temperature_factor = nn.Parameter(torch.Tensor([config.strongermax_temperature_factor]))
         else:
             self.temperature_factor = config.strongermax_temperature_factor
 
+        # Logging
         self.softmax_io_log_interval = config.softmax_io_log_interval
         self.iter_num = 0
 
@@ -233,11 +233,24 @@ class Strongermax(nn.Module):
         else:
             self.obo_offset = config.strongermax_obo
 
+        # This will allow adding a zero vector along the attention dimension.
+        self.add_zero_attn = config.strongermax_add_zero_attn
+        self.original_shape = None
+
     def forward(self, x):
-        x_adj = x
+
+        x_adj = x.clone()
+
+        # If add_zero_attn is True, add a zero vector along `self.dim`
+        if self.add_zero_attn:
+            self.original_shape = x.shape
+            zeros_shape = list(self.original_shape)
+            zeros_shape[self.dim] = 1
+            zero_vec = torch.zeros(zeros_shape, device=x.device, dtype=x.dtype)
+            x_adj = torch.cat([x_adj, zero_vec], dim=self.dim)
 
         if self.clamp_inputs:
-            x_adj[x > self.clamp_value] = self.clamp_value
+            x_adj[x_adj > self.clamp_value] = self.clamp_value
 
         if self.subtract_max:
             # Guessing correctly instead of subtracting real max can save a pass
@@ -245,6 +258,7 @@ class Strongermax(nn.Module):
             max_x = x_adj.max(dim=self.dim, keepdim=True).values
 
             if self.overflow_recompute:
+                # If any value is above the guess, recompute with true max
                 if (torch.max(x_adj - self.xmax_guess)) > self.overflow_recompute_value:
                     x_adj = x_adj - max_x
                 else:
@@ -255,6 +269,7 @@ class Strongermax(nn.Module):
                 else:
                     x_adj = x_adj - max_x
 
+        # Compute the exponent for each element
         result = torch.pow(self.strength, x_adj / self.temperature_factor)
 
         if self.div_by_sum_of_terms:
@@ -262,10 +277,18 @@ class Strongermax(nn.Module):
 
         # TODO: Fix to divide by position from first part of context
         if self.div_by_seq_len:
-            seq_len = x.shape[self.dim]
+            seq_len = x_adj.shape[self.dim]
             result = result / seq_len
 
         result = result / self.divisor
+
+        # If we added zero attention, remove it now to restore original shape
+        # This ensures no dimension mismatch (e.g., going back to original context length)
+        if self.add_zero_attn:
+            # Remove the last "no-op" slot
+            slices = [slice(None)] * len(result.shape)
+            slices[self.dim] = slice(None, self.original_shape[self.dim])
+            result = result[tuple(slices)]
 
         if self.training and self.softmax_io_logging and self.iter_num % self.softmax_io_log_interval == 0:
             self.inputs = x

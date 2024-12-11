@@ -441,6 +441,10 @@ def parse_args():
     model_group.add_argument('--strongermax_temperature_factor', type=float, default=1.0)
     model_group.add_argument('--strongermax_use_learned_temperature_factor', default=False, action=argparse.BooleanOptionalAction)
 
+    ### Zero attention vector option
+    model_group.add_argument('--strongermax_add_zero_attn', default=False, action=argparse.BooleanOptionalAction)
+
+
     ### ExpPolymax Options
     model_group.add_argument('--exppolymax_use_euler_base', default=True, action=argparse.BooleanOptionalAction)
     model_group.add_argument("--exppolymax_base", type=float, default=4.0)

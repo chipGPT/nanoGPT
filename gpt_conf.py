@@ -144,6 +144,9 @@ class GPTConfig:
     strongermax_temperature_factor: float = 1.0
     strongermax_use_learned_temperature_factor: bool = False
 
+    # add equivalent of zero attention from MHA: https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
+    strongermax_add_zero_attn: bool = False
+
     ## ExpPolymax options
     exppolymax_use_euler_base: bool = True
     exppolymax_base: float = math.e
