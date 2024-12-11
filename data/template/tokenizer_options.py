@@ -5,7 +5,7 @@ import numpy as np
 import sentencepiece as spm
 import tiktoken
 from tqdm import tqdm  # For progress bars
-
+from transformers import AutoTokenizer
 
 class Tokenizer:
     def __init__(self, args):
@@ -312,3 +312,46 @@ class CustomCharTokenizerWithByteFallback(Tokenizer):
                     byte_buffer = []
         return ''.join(chars)
 
+class HuggingFaceTokenizer(Tokenizer):
+    def __init__(self, args):
+        """
+        Initialize Tokenizer using Hugging Face's AutoTokenizer.
+        """
+        super().__init__(args)
+        self.model = args.method
+        if args.method == "gemma":
+            self.huggingface_model_name = f"google/{args.gemma_model}"
+        if args.method == "qwen2":
+            self.huggingface_model_name = f"Qwen/Qwen2-{args.qwen2_model.split('_')[1].replace('p', '.').upper()}"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.huggingface_model_name)
+
+        # Save vocab size and other meta information
+        self.vocab_size = self.tokenizer.vocab_size
+        self.special_tokens = self.tokenizer.special_tokens_map
+
+    def tokenize(self, data):
+        print(f"Tokenizing data of size: {len(data)}")
+        chunk_size = 1024
+        ids = []
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i:i + chunk_size]
+            ids.extend(self.tokenizer.encode(chunk, add_special_tokens=True))
+        print(f"Generated {len(ids)} token IDs.")
+        meta = {
+            "vocab_size": self.vocab_size,
+            "tokenizer": self.model,
+            f"{self.model}_model": self.huggingface_model_name,
+            "special_tokens": self.special_tokens,
+        }
+        self.save_meta(meta)
+        return ids
+
+    def detokenize(self, ids):
+        """
+        Detokenize token IDs into a string.
+        Args:
+            ids (List[int]): List of token IDs to convert back to text.
+        Returns:
+            str: Decoded string.
+        """
+        return self.tokenizer.decode(ids)

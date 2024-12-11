@@ -34,6 +34,7 @@ from variations.position_encoding_variations import QuantizedEmbedding, RotaryEm
 from variations.activation_variations import activation_dictionary
 from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
+from variations.from_pretrained_variations import from_pretrained, from_pretrained_huggingface
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
 
 def create_shared_param_group(layer_type, config):
@@ -431,6 +432,14 @@ class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.norm_variant_pre_mlp = None
+        self.norm_variant_post_mlp = None
+
+        if config.norm_variant_pre_mlp:
+            self.norm_variant_pre_mlp = norm_dictionary[config.norm_variant_pre_mlp]
+        if config.norm_variant_post_mlp:
+            self.norm_variant_post_mlp = norm_dictionary[config.norm_variant_post_mlp]
+
         self.full_quant_iteration = config.full_quant_iteration
         self.eval_interval = config.eval_interval
 
@@ -481,6 +490,8 @@ class MLP(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x, iter_num):
+        if self.norm_variant_pre_mlp:
+            x = self.norm_variant_pre_mlp(x)
 
         if self.quantization_mlp_dict["quantize_mlp_act_input"]:
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_input_bits"]
@@ -532,6 +543,9 @@ class MLP(nn.Module):
             num_bits = self.quantization_mlp_dict["quantize_mlp_act_output_bits"]
             quant_method = self.quantization_mlp_dict["activations_quant_method"]
             x = fake_quantize_act(self, "mlp_act_output", x, num_bits, quant_method, iter_num)
+
+        if self.norm_variant_post_mlp:
+            x = self.norm_variant_post_mlp(x)
         return x
 
 class Block(nn.Module):
@@ -584,6 +598,8 @@ class Block(nn.Module):
             return custom_forward(x)
 
 class GPT(nn.Module):
+    from_pretrained = classmethod(from_pretrained)
+    from_pretrained_huggingface = classmethod(from_pretrained_huggingface)
 
     def __init__(self, config):
         super().__init__()
@@ -925,69 +941,6 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
-
-    @classmethod
-    def from_pretrained(cls, config, model_type):
-        # assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        from transformers import GPT2LMHeadModel
-
-        print(f"loading weights from pretrained gpt: {model_type}")
-
-        # create a from-scratch initialized minGPT model
-        model = GPT(config)
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-
-        sd = model.state_dict()
-        sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-
-        # init a huggingface/transformers model
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-        sd_hf = model_hf.state_dict()
-
-        # copy while ensuring all of the parameters are aligned and match in names and shapes
-        sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-        transposed = ['attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-        # this means that we have to transpose these weights when we import them
-        # NOTE: the assert below will fail because we split out the c_attn linears!
-        # assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-        for key in sd_keys_hf:
-            if any(key.endswith(w) for w in transposed):
-                # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[key].shape[::-1] == sd[key].shape
-                with torch.no_grad():
-                    sd[key].copy_(sd_hf[key].t())
-            elif key.endswith('attn.c_attn.weight') or key.endswith('attn.c_attn.bias'):
-                # split into c_attn_q/k/v
-                q, k, v  = sd_hf[key].t().split(config.n_embd, dim=0)
-                q_key_str = key.replace("c_attn", "c_attn_q")
-                k_key_str = key.replace("c_attn", "c_attn_k")
-                v_key_str = key.replace("c_attn", "c_attn_v")
-                sd[q_key_str] = q
-                sd[k_key_str] = k
-                sd[v_key_str] = v
-            else:
-                # vanilla copy over the other parameters
-                print(key)
-                if config.n_embd_wte:
-                    if key == "transformer.wte.weight":
-                        continue
-                    if key == "lm_head.weight":
-                        continue
-
-                if not config.use_abs_pos_embeddings:
-                    if key == "transformer.wpe.weight":
-                        continue
-
-                assert sd_hf[key].shape == sd[key].shape
-                with torch.no_grad():
-                    print(key)
-                    sd[key].copy_(sd_hf[key])
-
-        return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
