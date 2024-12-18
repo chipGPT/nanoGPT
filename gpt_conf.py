@@ -12,6 +12,9 @@ class GPTConfig:
     n_kv_group: int = 12
     n_embd: int = 768
 
+    # Big block after layer
+    big_block_after_layer: int = None
+
     # Steering Vectors
     ## Where to intercept
     apply_vector_at_layer_idx: int = None

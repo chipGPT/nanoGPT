@@ -1,5 +1,3 @@
-# tests.py
-
 import unittest
 import os
 import sys  # Import sys to exit with error codes
@@ -10,6 +8,7 @@ from tokenizers import (
     CustomTokenizer,
     CharTokenizer,
     CustomCharTokenizerWithByteFallback,
+    CSVIntegerTokenizer,  # Import the CSVIntegerTokenizer
 )
 from argparse import Namespace
 from rich.console import Console
@@ -108,6 +107,16 @@ class TestTokenizers(unittest.TestCase):
             os.remove("meta.pkl")
         if os.path.exists("remaining.txt"):
             os.remove("remaining.txt")
+        # Clean up custom_chars_file if exists
+        if hasattr(self, 'custom_chars_file') and os.path.exists(self.custom_chars_file):
+            os.remove(self.custom_chars_file)
+        # Clean up CSV input file if exists
+        if hasattr(self, 'csv_input_file') and os.path.exists(self.csv_input_file):
+            os.remove(self.csv_input_file)
+        # Clean up 'out' directory if it exists
+        if os.path.exists("out"):
+            import shutil
+            shutil.rmtree("out")
 
     def test_numeric_range_tokenizer(self):
         args = Namespace(min_token=100, max_token=1000)
@@ -185,7 +194,8 @@ class TestTokenizers(unittest.TestCase):
         self.assertEqual(self.sample_text, detokenized)
 
     def test_custom_char_tokenizer_with_byte_fallback(self):
-        args = Namespace(custom_chars_file="custom_chars.txt")
+        self.custom_chars_file = "custom_chars.txt"
+        args = Namespace(custom_chars_file=self.custom_chars_file)
         # Create a custom characters file for testing
         with open(args.custom_chars_file, 'w', encoding='utf-8') as f:
             f.write('a\nb\nc\n')
@@ -202,11 +212,30 @@ class TestTokenizers(unittest.TestCase):
         console.print(detokenized, style="output")
 
         self.assertEqual(test_string, detokenized)
-        print("CustomCharTokenizerWithByteFallback test passed.")
 
-        # Clean up
-        if os.path.exists(args.custom_chars_file):
-            os.remove(args.custom_chars_file)
+    def test_csv_integer_tokenizer(self):
+        # Sample CSV content
+        sample_csv = "2020,10,31\n2021,11,1\n2022,12,15"
+        args = Namespace(
+            method='csv_integer',
+            field_prefixes=['y', 'm', 'd'],
+            field_min_values=[2020, 1, 1],
+            field_max_values=[2022, 12, 31],
+            train_input=None,
+            val_input=None,
+            train_output='train.bin',
+            val_output='val.bin',
+        )
+        tokenizer = CSVIntegerTokenizer(args)
+        ids = tokenizer.tokenize(sample_csv)
+        detokenized = tokenizer.detokenize(ids)
+
+        console.print("[input]Input:[/input]")
+        console.print(sample_csv, style="input")
+        console.print("[output]Detokenized Output:[/output]")
+        console.print(detokenized, style="output")
+
+        self.assertEqual(sample_csv, detokenized)
 
 if __name__ == '__main__':
     run_tests()

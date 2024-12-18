@@ -312,3 +312,100 @@ class CustomCharTokenizerWithByteFallback(Tokenizer):
                     byte_buffer = []
         return ''.join(chars)
 
+
+class CSVIntegerTokenizer(Tokenizer):
+    def __init__(self, args):
+        super().__init__(args)
+        self.field_prefixes = args.field_prefixes
+        self.field_min_values = args.field_min_values
+        self.field_max_values = args.field_max_values
+
+        if len(self.field_prefixes) != len(self.field_min_values) or len(self.field_prefixes) != len(self.field_max_values):
+            raise ValueError("field_prefixes, field_min_values, and field_max_values must have the same length")
+
+        self.num_fields = len(self.field_prefixes)
+
+        # Build the token mappings for each field
+        self.field_token_mappings = []
+        token_id = 0
+        self.stoi = {}
+        self.itos = {}
+
+        for i in range(self.num_fields):
+            prefix = self.field_prefixes[i]
+            min_value = self.field_min_values[i]
+            max_value = self.field_max_values[i]
+
+            field_mapping = {}
+            for value in range(min_value, max_value + 1):
+                token = f"{value}{prefix}"
+                if token not in self.stoi:
+                    self.stoi[token] = token_id
+                    self.itos[token_id] = token
+                    token_id += 1
+                field_mapping[value] = self.stoi[token]
+
+            self.field_token_mappings.append(field_mapping)
+
+        # Add newline token
+        self.newline_token = '\n'
+        self.stoi[self.newline_token] = token_id
+        self.itos[token_id] = self.newline_token
+        token_id += 1
+
+        self.vocab_size = token_id
+
+    def tokenize(self, data):
+        ids = []
+        lines = data.strip().split('\n')
+        for line in tqdm(lines, desc="Tokenizing CSV Data"):
+            line = line.strip()
+            if not line:
+                continue
+            fields = line.split(',')
+            if len(fields) != self.num_fields:
+                raise ValueError(f"Expected {self.num_fields} fields, but got {len(fields)} in line: {line}")
+
+            for i in range(self.num_fields):
+                try:
+                    value = int(fields[i])
+                except ValueError:
+                    raise ValueError(f"Invalid integer value '{fields[i]}' in field {i} in line: {line}")
+                if value < self.field_min_values[i] or value > self.field_max_values[i]:
+                    raise ValueError(f"Value {value} out of range for field {i} in line: {line}")
+
+                token_id = self.field_token_mappings[i][value]
+                ids.append(token_id)
+            # Append newline token after each line
+            ids.append(self.stoi[self.newline_token])
+
+        # Save the meta data
+        meta = {
+            'vocab_size': self.vocab_size,
+            'stoi': self.stoi,
+            'itos': self.itos,
+            'tokenizer': 'csv_integer',
+            'field_prefixes': self.field_prefixes,
+            'field_min_values': self.field_min_values,
+            'field_max_values': self.field_max_values,
+            'newline_token': self.newline_token,
+        }
+        self.save_meta(meta)
+        return ids
+
+    def detokenize(self, ids):
+        tokens = [self.itos[id] for id in ids]
+        lines = []
+        current_line_tokens = []
+        for token in tokens:
+            if token == self.newline_token:
+                # End of line
+                if current_line_tokens:
+                    # Remove prefixes and reconstruct the CSV line
+                    values = [token.rstrip(self.field_prefixes[j]) for j, token in enumerate(current_line_tokens)]
+                    lines.append(','.join(values))
+                    current_line_tokens = []
+            else:
+                current_line_tokens.append(token)
+        return '\n'.join(lines)
+

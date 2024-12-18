@@ -36,6 +36,18 @@ from variations.linear_variations import linear_dictionary
 from variations.router_variations import router_dictionary
 from quantization.quantize import quantize_dictionary, dequantize, fake_quantize_act
 
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+
+    def __init__(self, n_embd, bias):
+        super().__init__()
+        ndim = n_embd
+        bias = bias
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 def create_shared_param_group(layer_type, config):
 
     # explore MoE layers being reflected symmetrically
@@ -426,6 +438,77 @@ class CausalSelfAttention(nn.Module):
 
         return y
 
+class BIG_ATTN(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(config.n_embd, 6 * config.n_embd, bias=config.bias)
+        # output projection
+        self.c_proj = nn.Linear(2*config.n_embd, 2*config.n_embd, bias=config.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        self.flash = False
+        if not self.flash:
+            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            # causal mask to ensure that attention is only applied to the left in the input sequence
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                        .view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x, iter_num=None):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(2*self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, 2*C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, 2*C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, 2*C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        if self.flash:
+            # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+        else:
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, 2*C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
+class BIG_MLP(nn.Module):
+   def __init__(self, config):
+      super().__init__()
+      self.n_embd = config.n_embd * 2
+
+      self.mlp_variant = config.mlp_variant
+      self.linear_variant = linear_dictionary["linear"]
+
+      self.c_fc = self.linear_variant(self.n_embd, config.mlp_expansion_factor * self.n_embd)
+      self.c_proj = self.linear_variant(config.mlp_expansion_factor * self.n_embd, self.n_embd // 2)
+
+      self.activation_variant = activation_dictionary[config.activation_variant](config=config)
+      self.dropout = nn.Dropout(config.dropout)
+
+   def forward(self, x, iter_num=None):
+
+      x = self.c_fc(x)
+      x = self.activation_variant(x)
+      x = self.c_proj(x)
+      return x
+
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -534,6 +617,42 @@ class MLP(nn.Module):
             x = fake_quantize_act(self, "mlp_act_output", x, num_bits, quant_method, iter_num)
         return x
 
+class BigBlock(nn.Module):
+    def __init__(self, config, mlp=None, attn=None):
+        super().__init__()
+
+        # Initialize and set attn normalization (e.g. rmsnorm)
+        norm_variant_attn = norm_dictionary[config.norm_variant_attn]
+        self.ln_1 = LayerNorm(n_embd = config.n_embd, bias=False)
+        self.ln_2 = LayerNorm(n_embd = config.n_embd *2, bias=False)
+
+        self.use_post_ln = config.use_post_ln
+        self.use_parallel_mlp = config.use_parallel_mlp
+        self.use_gradient_checkpointing = config.use_gradient_checkpointing
+
+        self.attn = attn
+
+        self.lin_up = self.linear_variant = linear_dictionary["linear"]
+        self.lin_up = self.linear_variant(config.n_embd, 2*config.n_embd)
+
+        self.lin_down = self.linear_variant = linear_dictionary["linear"]
+        self.lin_down = self.linear_variant(2*config.n_embd, config.n_embd)
+
+        # Allow for sharing mlp between blocks
+        self.mlp = mlp
+
+    def forward(self, x, iter_num):
+        def custom_forward(*inputs):
+            x = inputs[0]
+            x = self.lin_up(x) + self.attn(self.ln_1(x), iter_num)
+            x = self.lin_down(x) + self.mlp(self.ln_2(x), iter_num)
+            return x
+
+        if self.use_gradient_checkpointing and x.requires_grad:
+            return checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
+        else:
+            return custom_forward(x)
+
 class Block(nn.Module):
     def __init__(self, config, mlp=None, attn=None):
         super().__init__()
@@ -634,6 +753,8 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
             ln_f = norm_dictionary[config.norm_variant_output](config),
         ))
+
+        self.big_block = BigBlock(config, mlp=BIG_MLP(config), attn=BIG_ATTN(config))
 
         if self.config.use_abs_pos_embeddings:
             if config.quantize_wpe:
@@ -818,10 +939,16 @@ class GPT(nn.Module):
             else:
                 x = block(x, iter_num)
 
+            # Intercept for Expanded Layer
+            # if self.use_expanded_layer and layer == self.config.apply_expansion_at_layer_idx:
+            if layer == self.config.big_block_after_layer:
+                # x_prior = x
+                x = self.big_block(x, iter_num)
+                # x = x_prior + x
+
             # Intercept for Learned Steering Vectors
             if self.use_lsv and layer == self.config.apply_lsv_at_layer_idx:
                 x = self.lsv_matrix(x)
-                # x = self.apply_learned_vector_to_layer_output(x)
 
             # Intercept for Steering Vectors
             if self.config.apply_vector_at_layer_idx is not None and layer == self.config.apply_vector_at_layer_idx:
@@ -1090,51 +1217,3 @@ class GPT(nn.Module):
 
         return idx, generated_text
 
-
-class MoELayer(nn.Module):
-    """ Mixture of Experts layer to replace FFN (or every other FFN) """
-
-    def __init__(self, config):
-        super().__init__()
-        self.top_k = config.moe_top_k
-        # TODO: implement expert capacity throttling
-        # self.expert_capacity = config.expert_capacity
-        self.num_experts = config.n_experts
-        self.router = router_dictionary[config.moe_router_scheme](config)
-        self.experts = nn.ModuleList([MLP(config) for _ in range(config.n_experts)])
-
-    def forward(self, x):
-        # Assuming x has shape [batch_size, seq_len, n_embd]
-        batch_size, seq_len, _ = x.shape
-        gating_output, indices = self.router(x)
-        # print(f"gating_output.shape: {gating_output.shape}")
-        # print(f"indices 1 count: {indices}")
-        final_output = torch.zeros_like(x)
-
-        # Flatten the batch and sequence dimensions to treat each token independently
-        flat_x = x.view(-1, x.size(-1))
-        # print(f"x.shape() = {x.shape}")
-        # print(f"flat_x = {flat_x.shape}")
-        flat_gating_output = gating_output.view(-1, gating_output.size(-1))
-        # print(f"flat_gating_output.shape = {flat_gating_output.shape}")
-
-        # Process each expert in parallel
-        for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k
-            expert_mask = (indices == i).any(dim=-1)
-            flat_mask = expert_mask.view(-1)
-            # print(f"expert_mask shape = {expert_mask.shape}")
-            # print(f"flat_mask shape = {flat_mask.shape}")
-
-            if flat_mask.any():
-                expert_input = flat_x[flat_mask]
-                expert_output = expert(expert_input)
-
-                # Extract and apply gating scores
-                gating_scores = flat_gating_output[flat_mask, i].unsqueeze(1)
-                weighted_output = expert_output * gating_scores
-
-                # Update final output additively by indexing and adding
-                final_output[expert_mask] += weighted_output.squeeze(1)
-        # print(f"final_output.shape = {final_output.shape}\n")
-        return final_output

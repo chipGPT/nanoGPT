@@ -129,6 +129,7 @@ def parse_args():
     model_group.add_argument('--obtain_vector_at_layer_idx', default=None, type=int)
     model_group.add_argument("--obtain_vector_file", type=str, default=None, help="initial KAN activation")
 
+    model_group.add_argument('--big_block_after_layer', default=None, type=int)
     ## Learned Steering Vector (LSV) Options
     lsv_variations = [
             "one_hot",
