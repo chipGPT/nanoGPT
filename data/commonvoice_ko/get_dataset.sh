@@ -53,9 +53,12 @@ done
 echo "All .tsv files have been processed."
 
 # Run program to convert sentences into IPA format.
-output_ipa="ko_ipa.txt"
 echo "Converting sentences to IPA..."
-python3 utils/ko_en_to_ipa.py "$output_file" "$output_ipa"
+python3 ./utils/ko_en_to_ipa.py "$output_file" --input_json_key "sentence" --output_json_key "phonetic"
+
+output_ipa="ko_ipa.txt"
+echo "export IPA to txt file"
+python3 ./utils/extract_json_values.py "$output_file" "phonetic" "$output_ipa"
 
 echo "IPA conversion finished."
 
