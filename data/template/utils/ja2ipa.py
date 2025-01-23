@@ -1,5 +1,7 @@
 from collections import OrderedDict
 import pykakasi.kakasi as kakasi
+import argparse
+import json
 from tqdm import tqdm
 import sys
 
@@ -348,11 +350,64 @@ def hiragana2IPA(text):
         
     return text
 
-#open original japanese raw text 'input.txt', and save output ipa data with file 'input_ipa.jp'
-with open('./input.txt', mode="r", encoding="utf-8") as f:
-    lines = f.readlines()
-    for line in tqdm(lines):
-        kana = getRomeNameByHira(line)
-        ipa = hiragana2IPA(kana)
-        with open("./txt_output/input_ipa.jp","a") as mon:
-                mon.write(ipa)
+def process_japanese_text(input_file, output_file, json_inplace_update=False, json_input_field="sentence", json_output_field="sentence_ipa"):
+    """
+    Processes Japanese text, converting it to IPA. Handles both plain text and JSON input.
+
+    Args:
+        input_file (str): Path to the input file (text or JSON).
+        output_file (str): Path to the output file.
+        json_inplace_update (bool): If True, process JSON input and add IPA to the same JSON.
+        json_input_field (str): JSON field to read from (default: "sentence").
+        json_output_field (str): JSON field to write IPA to (default: "sentence_ipa").
+    """
+
+    if json_inplace_update:
+        try:
+            with open(input_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            for entry in tqdm(data, desc="Processing JSON entries"):
+                if json_input_field in entry:
+                    kana = getRomeNameByHira(entry[json_input_field])
+                    ipa = hiragana2IPA(kana)
+                    entry[json_output_field] = ipa  # Add IPA to the same JSON entry
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+
+        except FileNotFoundError:
+            print(f"Error: Input file '{input_file}' not found.")
+        except json.JSONDecodeError:
+            print(f"Error: Invalid JSON format in '{input_file}'.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+    else:
+        try:
+            with open(input_file, mode="r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            with open(output_file, "w", encoding="utf-8") as outfile:
+                for line in tqdm(lines, desc="Processing lines"):
+                    kana = getRomeNameByHira(line.strip())
+                    ipa = hiragana2IPA(kana)
+                    outfile.write(ipa + "\n")
+
+        except FileNotFoundError:
+            print(f"Error: Input file '{input_file}' not found.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Convert Japanese text to IPA.")
+    parser.add_argument("input_file", help="Path to the input Japanese text file (default: input.txt)", nargs="?", default="input.txt")
+    parser.add_argument("output_file", help="Path to the output IPA file (default: input_ipa.txt)", nargs="?", default="input_ipa.txt")
+    parser.add_argument("-j", "--json_inplace_update", action="store_true", help="Process JSON input and add IPA to the same JSON entries")
+    parser.add_argument("--json_input_field", default="sentence", help="JSON field to read from (default: sentence)")
+    parser.add_argument("--json_output_field", default="sentence_ipa", help="JSON field to write IPA to (default: sentence_ipa)")
+
+    args = parser.parse_args()
+
+    process_japanese_text(args.input_file, args.output_file, args.json_inplace_update, args.json_input_field, args.json_output_field)
