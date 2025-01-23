@@ -25,9 +25,14 @@ from utils.statistic_plots import (
 
 from rich.progress import Progress
 
-import matplotlib.pyplot as plt
+# GNS Related
+import gns_utils
+from hook import (add_hooks_to_model, add_sogns_hooks,
+                   add_exact_hooks,  gather_hook_results)
+# gns_type="exact"
+gns_type=None
+
 import numpy as np
-import plotly.graph_objects as go
 import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -180,6 +185,15 @@ class Trainer:
         if self.args.block_size < self.model.config.block_size:
             self.model.crop_block_size(self.args.block_size)
             self.model_args['block_size'] = self.args.block_size
+
+        # Add gradient monitoring
+        if gns_type is not None:
+            get_gns_fn = {'sogns': add_sogns_hooks, 'exact': add_exact_hooks}
+            add_hooks_to_model(self.model, get_gns_fn[gns_type])
+            self.gns_ema = gns_utils.EMA(beta=0.9)
+
+            # Initialize GNS for later
+            self.gns = None
 
         self.model.to(self.device)
 
@@ -716,11 +730,14 @@ class Trainer:
 
                 if self.iter_num % self.args.eval_interval == 0 and self.master_process:
                     losses = self.estimate_loss()
+                    if gns_type is not None:
+                        self.gns = self.gns_ema.get_gns()
+
                     vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
                         for dataset, dataset_losses in losses['datasets'].items():
-                            print(f"step {self.iter_num}: {dataset} train loss {dataset_losses['train']:.4f}, val loss {dataset_losses['val']:.4f}")
+                            print(f"step {self.iter_num}: {dataset} train loss {dataset_losses['train']:.4f}, val loss {dataset_losses['val']:.4f, gns {self.gns:.2f}}")
                             self.log_metrics(dataset_losses, lr, running_mfu, vram_allocated, self.iter_num, target_dataset=dataset)
                     else:
                         # Default behavior for a single dataset
@@ -801,6 +818,11 @@ class Trainer:
 
                     self.scaler.scale(loss).backward()
 
+                    if gns_type is not None:
+                        approx_gns_results = gather_hook_results(self.model)
+                        self.gns_ema.update(*gns_utils.gnsify(approx_gns_results, self.args.batch_size, ddp=self.ddp))
+
+
                 if self.args.grad_clip != 0.0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
@@ -818,7 +840,12 @@ class Trainer:
                     if local_iter_num >= 5:
                         mfu = self.raw_model.estimate_mfu(self.args.batch_size * self.args.gradient_accumulation_steps, dt)
                         running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                    print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
+                    if gns_type is not None:
+                        self.gns = self.gns_ema.get_gns()
+                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}")
+                    else:
+                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
+
                     if math.isnan(lossf):
                         # If training loss is nan, then exit.
                         with open(self.args.out_dir + "/nan_iter_num.txt", 'w') as file:
