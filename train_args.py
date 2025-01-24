@@ -55,6 +55,13 @@ def parse_args():
     training_group.add_argument('--batch_size', default=64, type=int)
     training_group.add_argument("--seed", default=1337, type=int)
 
+    # Multicontext Training Dataset args
+    training_group.add_argument('--multicontext_training', default=True, action=argparse.BooleanOptionalAction)
+    training_group.add_argument('--dataset_a', default='shakespeare_char', type=str)
+    training_group.add_argument('--dataset_b', default='shakespeare_char', type=str)
+    training_group.add_argument('--vocab_size_a', default=65, type=int)
+    training_group.add_argument('--vocab_size_b', default=65, type=int)
+
     # Add a new argument for specifying multiple datasets
     training_group.add_argument('--dataset_list', default=None, nargs='+', type=str, help="If not None, training will be done from a list of datasets to train on, e.g. --dataset_list shakespeare wikitext103 openwebtext")
     training_group.add_argument('--dataset_interleaving', default=False, action=argparse.BooleanOptionalAction)

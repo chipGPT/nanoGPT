@@ -470,7 +470,6 @@ class GPT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert config.vocab_size is not None
         assert config.block_size is not None
 
         self.config = config
@@ -509,10 +508,12 @@ class GPT(nn.Module):
                 word_embd = nn.Embedding(config.vocab_size, config.n_embd_wte)
             else:
                 # no factorization
-                word_embd = nn.Embedding(config.vocab_size, config.n_embd)
+                word_embd_a = nn.Embedding(config.vocab_size_a, config.n_embd)
+                word_embd_b = nn.Embedding(config.vocab_size_b, config.n_embd)
 
         self.transformer = nn.ModuleDict(dict(
-            wte = word_embd,
+            wte_a = word_embd_a,
+            wte_b = word_embd_b,
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config, mlp=shared_mlp_array[i], attn=shared_attn_array[i]) for i in range(config.n_layer)]),
             ln_f = norm_dictionary[config.norm_variant_output](config),
@@ -533,12 +534,14 @@ class GPT(nn.Module):
         if config.n_embd_wte:
             self.lm_head = nn.Linear(config.n_embd_wte, config.vocab_size, bias=False)
         else:
-            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            self.lm_head_a = nn.Linear(config.n_embd, config.vocab_size_a, bias=False)
+            self.lm_head_b = nn.Linear(config.n_embd, config.vocab_size_b, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        self.transformer.wte_a.weight = self.lm_head_a.weight # https://paperswithcode.com/method/weight-tying
+        self.transformer.wte_b.weight = self.lm_head_b.weight # https://paperswithcode.com/method/weight-tying
 
         # Initialize and possibly import scale_up and scale_down matrices, if factorization is set
         if self.n_embd_wte:
@@ -670,13 +673,15 @@ class GPT(nn.Module):
         np.savez(file_path, scale_up=scale_up_matrix, scale_down=scale_down_matrix)
         print(f"Scale matrices saved to {file_path}")
 
-    def forward(self, idx, targets=None, iter_num=None):
-        device = idx.device
-        b, t = idx.size()
+    def forward(self, tokens_a, tokens_b, targets_a=None, targets_b=None, iter_num=None):
+        device = tokens_a.device
+        b, t = tokens_a.size()
         # assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        tok_emb_a = self.transformer.wte_a(tokens_a) # token embeddings of shape (b, t, n_embd)
+        tok_emb_b = self.transformer.wte_b(tokens_b) # token embeddings of shape (b, t, n_embd)
+
         x = None
 
         if self.n_embd_wte:
@@ -684,9 +689,9 @@ class GPT(nn.Module):
         if self.config.use_abs_pos_embeddings:
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-            x = self.transformer.drop(tok_emb + pos_emb)
+            x = self.transformer.drop(tok_emb_a + tok_emb_b + pos_emb)
         else:
-            x = self.transformer.drop(tok_emb)
+            x = self.transformer.drop(tok_emb_a + tok_emb_b)
 
         x.requires_grad_(True)  # Ensure requires_grad is True
 
@@ -720,16 +725,22 @@ class GPT(nn.Module):
         if self.n_embd_wte:
             x = F.linear(x, self.transformer.scale_down.weight.t())
 
-        if targets is not None:
+        if targets_a is not None and targets_b is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            logits_a = self.lm_head_a(x)
+            logits_b = self.lm_head_b(x)
+            loss_a = F.cross_entropy(logits_a.view(-1, logits_a.size(-1)), targets_a.view(-1), ignore_index=-1)
+            loss_b = F.cross_entropy(logits_b.view(-1, logits_b.size(-1)), targets_b.view(-1), ignore_index=-1)
+            loss = (loss_a + loss_b) / 2.0
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+            logits_a = self.lm_head_a(x[:, [-1], :])
+            logits_b = self.lm_head_b(x[:, [-1], :])
+            loss_a = F.cross_entropy(logits_a.view(-1, logits_a.size(-1)), targets_a.view(-1), ignore_index=-1)
+            loss_b = F.cross_entropy(logits_b.view(-1, logits_b.size(-1)), targets_b.view(-1), ignore_index=-1)
+            loss = (loss_a + loss_b) / 2.0
 
-        return logits, loss
+        return logits_a, logits_b, loss_a, loss_b, loss
 
     def set_lsv_scaling_factor(self, factor):
         self.lsv_matrix.update_lsv_scaling_factor(factor)

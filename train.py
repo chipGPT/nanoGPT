@@ -100,7 +100,8 @@ class Trainer:
         # Model settings
         # TODO only add if they are defined from the argparse
         self.model_args = {action.dest: getattr(self.args, action.dest) for action in self.model_group._group_actions}
-        self.model_args['vocab_size'] = None
+        self.model_args['vocab_size_a'] = None
+        self.model_args['vocab_size_b'] = None
         self.model_args['eval_interval'] = self.args.eval_interval
 
         # Training settings
@@ -111,7 +112,8 @@ class Trainer:
             print(self.model_args['lsv_dataset_num'])
 
         if self.args.init_from == 'scratch':
-            self.model_args['vocab_size'] = self.get_vocab_size_from_meta()
+            self.model_args['vocab_size_a'] = self.args.vocab_size_a
+            self.model_args['vocab_size_b'] = self.args.vocab_size_b
 
             # Save full configuration used for training
             config_json = {**self.model_args, **self.training_args}
@@ -351,7 +353,13 @@ class Trainer:
 
     def load_data(self):
 
-        if self.args.dataset_list is None:
+        if self.args.multicontext_training:
+            self.train_data_a = np.memmap(os.path.join('data', self.args.dataset_a, 'train.bin'), dtype=np.uint16, mode='r')
+            self.val_data_a = np.memmap(os.path.join('data', self.args.dataset_a, 'val.bin'), dtype=np.uint16, mode='r')
+
+            self.train_data_b = np.memmap(os.path.join('data', self.args.dataset_b, 'train.bin'), dtype=np.uint16, mode='r')
+            self.val_data_b = np.memmap(os.path.join('data',self.args.dataset_b, 'val.bin'), dtype=np.uint16, mode='r')
+        elif self.args.dataset_list is None:
 
             if self.model_args['vocab_size'] is None:
                 sys.exit("Error: no vocab size specified")
@@ -486,6 +494,28 @@ class Trainer:
                 dataset_index = self.args.dataset_list.index(dataset)
                 self.args.learning_rate = self.args.dataset_sampling_learning_rate[dataset_index]
 
+        elif self.args.dataset_a is not None:
+            if split == 'train':
+                data_a = self.train_data_a
+                data_b = self.train_data_b
+            else:
+                data_a = self.val_data_a
+                data_b = self.val_data_b
+
+            ix_a = torch.randint(len(data_a) - self.args.block_size, (self.args.batch_size,))
+            ix_b = torch.randint(len(data_b) - self.args.block_size, (self.args.batch_size,))
+
+            x_a = torch.stack([torch.from_numpy(data_a[i:i+self.args.block_size].astype(np.int64)) for i in ix_a])
+            y_a = torch.stack([torch.from_numpy(data_a[i+1:i+1+self.args.block_size].astype(np.int64)) for i in ix_a])
+
+            x_b = torch.stack([torch.from_numpy(data_b[i:i+self.args.block_size].astype(np.int64)) for i in ix_b])
+            y_b = torch.stack([torch.from_numpy(data_b[i+1:i+1+self.args.block_size].astype(np.int64)) for i in ix_b])
+
+            x_a, y_a = x_a.pin_memory().to(self.device, non_blocking=True), y_a.pin_memory().to(self.device, non_blocking=True)
+            x_b, y_b = x_b.pin_memory().to(self.device, non_blocking=True), y_b.pin_memory().to(self.device, non_blocking=True)
+
+            return x_a, y_a, x_b, y_b
+
         else:
             # Else use the 'dataset' arg by default for backwards compatibility
             dataset = self.args.dataset
@@ -546,14 +576,35 @@ class Trainer:
             out['train'] = out['datasets'][self.args.dataset]['train']
             print(out['val'])
 
+        elif self.args.multicontext_training:
+            # multicontext training
+            for split in ['train', 'val']:
+                losses_a = torch.zeros(self.args.eval_iters)
+                losses_b = torch.zeros(self.args.eval_iters)
+                for k in range(self.args.eval_iters):
+                    x_a, y_a, x_b, y_b = self.get_batch(split)
+
+                    with self.ctx:
+                        logits_a, logits_b, loss_a, loss_b, loss = self.model(x_a, x_b, y_a, y_b, iter_num=self.iter_num)
+                    losses_a[k] = loss_a
+                    losses_b[k] = loss_b
+
+                mean_a = losses_a.mean().item()
+                mean_b = losses_b.mean().item()
+
+                mean_loss = (mean_a + mean_b) / 2.0
+
+                out[split] = mean_loss
+                out[f"{split}_loss_a"] = mean_a
+                out[f"{split}_loss_b"] = mean_b
         else:
             # Default behavior for a single dataset
             for split in ['train', 'val']:
                 losses = torch.zeros(self.args.eval_iters)
                 for k in range(self.args.eval_iters):
-                    X, Y = self.get_batch(split)
+                    x_a, y_a, x_b, y_b = self.get_batch(split)
                     with self.ctx:
-                        logits, loss = self.model(X, Y, iter_num=self.iter_num)
+                        logits_a, logits_b, loss = self.model(X, Y, iter_num=self.iter_num)
                     losses[k] = loss.item()
                 out[split] = losses.mean()
 
@@ -581,8 +632,16 @@ class Trainer:
                 )
             else:
                 self.writer.add_scalars(
-                    "loss", {"train": losses['train'].item(), "val":
-                             losses['val'].item()}, iter_num
+                    "loss", {"train_a": losses['train_loss_a'], "val":
+                             losses['val_loss_a']}, iter_num
+                )
+                self.writer.add_scalars(
+                    "loss", {"train_b": losses['train_loss_b'], "val":
+                             losses['val_loss_b']}, iter_num
+                )
+                self.writer.add_scalars(
+                    "loss", {"train": losses['train'], "val":
+                             losses['val']}, iter_num
                 )
 
             self.writer.add_scalar("mfu_pct", running_mfu * 100, iter_num)
@@ -610,7 +669,7 @@ class Trainer:
             if target_dataset:
                 self.write_to_csv(losses['train'].item(), losses['val'].item(), prefix=f"{target_dataset}_")
             else:
-                self.write_to_csv(losses['train'].item(), losses['val'].item())
+                self.write_to_csv(losses['train'], losses['val'])
 
             # Other metrics
             self.write_to_csv(iter_num, lr, running_mfu, vram_allocated, prefix="misc_")
@@ -660,15 +719,21 @@ class Trainer:
                 "mfu": running_mfu*100,
             })
 
-    def log_metrics_non_validation(self, loss_training, running_mfu, vram_allocated, iter_num, target_dataset=None):
+    def log_metrics_non_validation(self, losses, running_mfu, vram_allocated, iter_num, target_dataset=None):
         if self.args.tensorboard_log:
             if target_dataset:
                 self.writer.add_scalars(
-                    "loss", {f"{target_dataset}/train": loss_training}, iter_num
+                    "loss", {f"{target_dataset}/train": losses['train']}, iter_num
                 )
             else:
                 self.writer.add_scalars(
-                    "loss", { "train": loss_training }, iter_num
+                    "loss", {"train_a": losses['train_loss_a']}, iter_num
+                )
+                self.writer.add_scalars(
+                    "loss", {"train_b": losses['train_loss_b']}, iter_num
+                )
+                self.writer.add_scalars(
+                    "loss", {"train": losses['train']}, iter_num
                 )
             self.writer.add_scalar("mfu_pct", running_mfu * 100, iter_num)
             self.writer.add_scalar("vram", vram_allocated, iter_num)
@@ -677,7 +742,7 @@ class Trainer:
             import wandb
             wandb.log({
                 "iter": iter_num,
-                "train/loss": loss_training,
+                "train/loss": losses['train'],
                 "mfu": running_mfu*100,
                 "vram": vram_allocated,
             })
@@ -694,7 +759,7 @@ class Trainer:
         torch.save(checkpoint, os.path.join(self.args.out_dir, filename))
 
     def train(self):
-        self.X, self.Y = self.get_batch('train')
+        x_a, y_a, x_b, y_b = self.get_batch('train')
         t0 = time.time()
         local_iter_num = 0
         running_mfu = -1.0
@@ -724,7 +789,11 @@ class Trainer:
                             self.log_metrics(dataset_losses, lr, running_mfu, vram_allocated, self.iter_num, target_dataset=dataset)
                     else:
                         # Default behavior for a single dataset
-                        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                        val_a = losses.get('val_loss_a', 0.0)
+                        val_b = losses.get('val_loss_b', 0.0)
+                        val = losses['val']
+                        print(f"step {self.iter_num}: train_loss_a {losses['train_loss_a']:.4f}, val_loss_a {losses['val_loss_a']:.4f}")
+                        print(f"step {self.iter_num}: train_loss_b {losses['train_loss_b']:.4f}, val_loss_b {losses['val_loss_b']:.4f}")
                         self.log_metrics(losses, lr, running_mfu, vram_allocated, self.iter_num)
 
                     if math.isnan(losses["val"]):
@@ -746,7 +815,7 @@ class Trainer:
                             self.best_val_loss = losses['val']
                             # Save best validation loss
                             with open(os.path.join(self.args.out_dir, 'best_val_loss_and_iter.txt'), "w") as best_loss_file:
-                                best_loss_file.write(str(self.best_val_loss.item())+","+str(self.iter_num))
+                                best_loss_file.write(str(self.best_val_loss)+","+str(self.iter_num))
                             # Reset early exit counter
                             num_steps_with_worse_loss = 0
                         if self.iter_num > 0:
@@ -790,14 +859,14 @@ class Trainer:
                         self.model.require_backward_grad_sync = (micro_step == self.args.gradient_accumulation_steps - 1)
 
                     with self.ctx:
-                        logits, loss = self.model(self.X, self.Y, iter_num=self.iter_num)
+                        logits_a, logits_b, loss_a, loss_b, loss = self.model(x_a, x_b, y_a, y_b, iter_num=self.iter_num)
 
                         if self.args.focus_on_top1_loss:
                             loss = self.custom_loss_with_top1_focus(logits, self.Y)  # Use custom loss
 
                         loss = loss / self.args.gradient_accumulation_steps
 
-                    self.X, self.Y = self.get_batch('train')
+                    x_a, y_a, x_b, y_b = self.get_batch('train')
 
                     self.scaler.scale(loss).backward()
 
@@ -815,10 +884,12 @@ class Trainer:
                 t0 = t1
                 if self.iter_num % self.args.log_interval == 0 and self.master_process:
                     lossf = loss.item() * self.args.gradient_accumulation_steps
+                    lossf_a = loss_a * self.args.gradient_accumulation_steps
+                    lossf_b = loss_b * self.args.gradient_accumulation_steps
                     if local_iter_num >= 5:
                         mfu = self.raw_model.estimate_mfu(self.args.batch_size * self.args.gradient_accumulation_steps, dt)
                         running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                    print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
+                    print(f"iter {self.iter_num}: loss {lossf:.4f}, loss_a {lossf_a:.4f},loss_b {lossf_b:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
                     if math.isnan(lossf):
                         # If training loss is nan, then exit.
                         with open(self.args.out_dir + "/nan_iter_num.txt", 'w') as file:
@@ -826,7 +897,11 @@ class Trainer:
                             sys.exit("Exiting training loss is NaN")
 
                     vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
-                    self.log_metrics_non_validation(lossf, running_mfu, vram_allocated, self.iter_num)
+                    losses_training = {}
+                    losses_training['train'] = lossf
+                    losses_training['train_loss_a'] = lossf_a
+                    losses_training['train_loss_b'] = lossf_b
+                    self.log_metrics_non_validation(losses_training, running_mfu, vram_allocated, self.iter_num)
 
                 if self.args.create_statistics and local_iter_num % self.args.softmax_io_log_interval == 0:
                     create_statistics(self, graph_y_labels)
