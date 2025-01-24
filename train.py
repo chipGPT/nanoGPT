@@ -25,9 +25,12 @@ from utils.statistic_plots import (
 
 from rich.progress import Progress
 
-import matplotlib.pyplot as plt
+# GNS Related
+import utils.gns_monitoring.gns_utils as gns_utils
+from utils.gns_monitoring.hook import (add_hooks_to_model, add_sogns_hooks,
+                   add_exact_hooks,  gather_hook_results)
+
 import numpy as np
-import plotly.graph_objects as go
 import torch
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -50,7 +53,13 @@ class Trainer:
         self.training_group = training_group
         self.logging_group = logging_group
 
-        # typically make the decay iters equal to max_iters
+        # GNS and batch schedule
+        self.gns = None
+        self.tokens_trained = 0
+
+        # Learning Rate Settings
+        self.lr = self.args.learning_rate
+        ## Make the decay iters equal to max_iters if not specified
         if self.args.lr_decay_match_max_iters:
             self.args.lr_decay_iters = self.args.max_iters
 
@@ -180,6 +189,16 @@ class Trainer:
         if self.args.block_size < self.model.config.block_size:
             self.model.crop_block_size(self.args.block_size)
             self.model_args['block_size'] = self.args.block_size
+
+        # Add gradient monitoring
+        if self.args.gns_type is not None:
+            get_gns_fn = {'sogns': add_sogns_hooks, 'exact': add_exact_hooks}
+            add_hooks_to_model(self.model, get_gns_fn[self.args.gns_type])
+            ema_beta = self.args.gns_ema_beta
+            self.gns_ema = gns_utils.EMA(beta=ema_beta)
+
+            # Initialize GNS for later
+            self.gns = None
 
         self.model.to(self.device)
 
@@ -491,6 +510,14 @@ class Trainer:
             dataset = self.args.dataset
             data = self.train_data if split == 'train' else self.val_data
 
+        # Adaptive GNS settings
+        if (self.gns is not None) and (self.args.gns_target is not None):
+            if self.gns < self.args.gns_target:
+                if self.args.batch_size < self.args.gns_max_batch:
+                    self.args.batch_size = math.ceil(self.args.batch_size * (1.0 + self.args.gns_batch_pct))
+            if self.gns > self.args.gns_target:
+                self.args.batch_size = math.ceil(self.args.batch_size * (1.0 - self.args.gns_batch_pct))
+
         # Generate random indices for the batch
         ix = torch.randint(len(data) - self.args.block_size, (self.args.batch_size,))
 
@@ -570,32 +597,36 @@ class Trainer:
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return self.args.min_lr + coeff * (self.args.learning_rate - self.args.min_lr)
 
-    def log_metrics(self, losses, lr, running_mfu, vram_allocated, iter_num, target_dataset=None):
+    def log_metrics(self, losses, running_mfu, target_dataset=None):
 
         if self.args.tensorboard_log:
             # Log metrics for each dataset separately
             if target_dataset:
                 self.writer.add_scalars(
                     "loss", {f"{target_dataset}/train": losses['train'].item(),
-                             f"{target_dataset}/val": losses['val'].item()}, iter_num
+                             f"{target_dataset}/val": losses['val'].item()}, self.iter_num
                 )
             else:
                 self.writer.add_scalars(
                     "loss", {"train": losses['train'].item(), "val":
-                             losses['val'].item()}, iter_num
+                             losses['val'].item()}, self.iter_num
                 )
 
-            self.writer.add_scalar("mfu_pct", running_mfu * 100, iter_num)
-            self.writer.add_scalar("lr", lr, iter_num)
-            self.writer.add_scalar("vram", vram_allocated, iter_num)
+            self.writer.add_scalar("mfu_pct", running_mfu * 100, self.iter_num)
+            self.writer.add_scalar("lr", self.lr, self.iter_num)
+            self.writer.add_scalar("vram", self.vram_allocated, self.iter_num)
+            self.writer.add_scalar("batch_size", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar("tokens_trained", self.tokens_trained, self.iter_num)
+            if self.args.gns_type is not None:
+                self.writer.add_scalar("gns", self.gns, self.iter_num)
 
         if self.args.wandb_log and self.master_process:
             import wandb
             log_data = {
-                "iter": iter_num,
-                "lr": lr,
+                "iter": self.iter_num,
+                "lr": self.lr,
                 "mfu": running_mfu * 100,
-                "vram": vram_allocated,
+                "vram": self.vram_allocated,
             }
             if target_dataset:
                 log_data[f"{dataset}/train/loss"] = losses['train']
@@ -607,18 +638,21 @@ class Trainer:
             wandb.log(log_data)
 
         if self.args.csv_log:
+            # concise training metrics
             if target_dataset:
                 self.write_to_csv(losses['train'].item(), losses['val'].item(), prefix=f"{target_dataset}_")
             else:
                 self.write_to_csv(losses['train'].item(), losses['val'].item())
 
-            # Other metrics
-            self.write_to_csv(iter_num, lr, running_mfu, vram_allocated, prefix="misc_")
-
-
+            # bulk metrics
+            if target_dataset:
+                self.write_to_csv(target_datset, losses['train'].item(), losses['val'].item(), running_mfu, prefix="bulk_")
+            else:
+                self.write_to_csv(self.args.dataset, losses['train'].item(), losses['val'].item(), running_mfu, prefix="bulk_")
 
 
     def write_to_csv(self, *args, prefix=""):
+        args = list(args)
         csv_full_dir = self.args.csv_dir
         if self.args.csv_ckpt_dir:
             csv_full_dir = f"{self.args.csv_dir}/{self.args.csv_ckpt_dir}"
@@ -630,56 +664,62 @@ class Trainer:
         with open(csv_path, 'a', newline='') as file:
             writer = csv.writer(file)
             # Write arguments as a new row in the CSV
+            args.insert(0, self.iter_num)
+            args.append(self.lr)
+            args.append(self.args.batch_size)
+            args.append(self.tokens_trained)
+            if self.args.gns_type is not None:
+                args.append(self.gns)
             writer.writerow(args)
 
 
-    def log_gamma_beta(self, gamma, beta, iter_num, layer_num, head_num=None):
+    def log_gamma_beta(self, gamma, beta, layer_num, head_num=None):
         if self.args.tensorboard_log:
             if head_num:
                 self.writer.add_scalars(
                         "gammas",
-                        {"gamma_L" + str(layer_num) + "_H" + head_num: gamma},
-                        iter_num
-                        )
+                        {"gamma_L" + str(layer_num) + "_H" + head_num: gamma}, self.iter_num)
                 self.writer.add_scalars(
                         "betas",
-                        {"beta_L" + str(layer_num) + "_H" + head_num: beta},
-                        iter_num
-                        )
+                        {"beta_L" + str(layer_num) + "_H" + head_num: beta}, self.iter_num)
             else:
-                self.writer.add_scalar( "gamma_L" + str(layer_num), gamma, iter_num)
-                self.writer.add_scalar( "beta_L" + str(layer_num), beta, iter_num)
+                self.writer.add_scalar( "gamma_L" + str(layer_num), gamma, self.iter_num)
+                self.writer.add_scalar( "beta_L" + str(layer_num), beta, self.iter_num)
 
         if self.args.wandb_log and self.master_process:
             import wandb
             wandb.log({
-                "iter": iter_num,
+                "iter": self.iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
-                "lr": lr,
+                "lr": self.lr,
                 "mfu": running_mfu*100,
             })
 
-    def log_metrics_non_validation(self, loss_training, running_mfu, vram_allocated, iter_num, target_dataset=None):
+    def log_metrics_non_validation(self, loss_training, running_mfu, target_dataset=None):
         if self.args.tensorboard_log:
             if target_dataset:
                 self.writer.add_scalars(
-                    "loss", {f"{target_dataset}/train": loss_training}, iter_num
+                    "loss", {f"{target_dataset}/train": loss_training}, self.iter_num
                 )
             else:
                 self.writer.add_scalars(
-                    "loss", { "train": loss_training }, iter_num
+                    "loss", { "train": loss_training }, self.iter_num
                 )
-            self.writer.add_scalar("mfu_pct", running_mfu * 100, iter_num)
-            self.writer.add_scalar("vram", vram_allocated, iter_num)
-
+            self.writer.add_scalar("mfu_pct", running_mfu * 100, self.iter_num)
+            self.writer.add_scalar("lr", self.lr, self.iter_num)
+            self.writer.add_scalar("vram", self.vram_allocated, self.iter_num)
+            self.writer.add_scalar("batch_size", self.args.batch_size, self.iter_num)
+            self.writer.add_scalar("tokens_trained", self.tokens_trained, self.iter_num)
+            if self.args.gns_type is not None:
+                self.writer.add_scalar("gns", self.gns, self.iter_num)
         if self.args.wandb_log and self.master_process:
             import wandb
             wandb.log({
-                "iter": iter_num,
+                "iter": self.iter_num,
                 "train/loss": loss_training,
                 "mfu": running_mfu*100,
-                "vram": vram_allocated,
+                "vram": self.vram_allocated,
             })
 
     def save_checkpoint(self, filename):
@@ -710,22 +750,26 @@ class Trainer:
         with progress:
             task_id = progress.add_task("[green]Training...", total=(self.args.max_iters - self.iter_num))
             while True:
-                lr = self.get_lr(self.iter_num) if self.args.decay_lr else self.args.learning_rate
+                if self.args.decay_lr:
+                    self.lr = self.get_lr(self.iter_num)
                 for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = lr
+                    param_group['lr'] = self.lr
 
                 if self.iter_num % self.args.eval_interval == 0 and self.master_process:
                     losses = self.estimate_loss()
-                    vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
+                    if self.args.gns_type is not None:
+                        self.gns = self.gns_ema.get_gns()
+
+                    self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
                     if self.args.dataset_list is not None:
                         # Print loss for each dataset if multiple datasets are used
                         for dataset, dataset_losses in losses['datasets'].items():
-                            print(f"step {self.iter_num}: {dataset} train loss {dataset_losses['train']:.4f}, val loss {dataset_losses['val']:.4f}")
-                            self.log_metrics(dataset_losses, lr, running_mfu, vram_allocated, self.iter_num, target_dataset=dataset)
+                            print(f"step {self.iter_num}: {dataset} train loss {dataset_losses['train']:.4f}, val loss {dataset_losses['val']:.4f}, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr}, tokens_trained {self.tokens_trained:e}")
+                            self.log_metrics(dataset_losses, running_mfu, target_dataset=dataset)
                     else:
                         # Default behavior for a single dataset
                         print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-                        self.log_metrics(losses, lr, running_mfu, vram_allocated, self.iter_num)
+                        self.log_metrics(losses, running_mfu)
 
                     if math.isnan(losses["val"]):
                         # If val loss is nan, then exit.
@@ -801,6 +845,11 @@ class Trainer:
 
                     self.scaler.scale(loss).backward()
 
+                    if self.args.gns_type is not None:
+                        approx_gns_results = gather_hook_results(self.model)
+                        self.gns_ema.update(*gns_utils.gnsify(approx_gns_results, self.args.batch_size, ddp=self.ddp))
+
+
                 if self.args.grad_clip != 0.0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
@@ -813,20 +862,29 @@ class Trainer:
                 t1 = time.time()
                 dt = t1 - t0
                 t0 = t1
+
+                # Udpate tokens trained
+                self.tokens_trained += self.args.batch_size * self.args.block_size
+
                 if self.iter_num % self.args.log_interval == 0 and self.master_process:
                     lossf = loss.item() * self.args.gradient_accumulation_steps
                     if local_iter_num >= 5:
                         mfu = self.raw_model.estimate_mfu(self.args.batch_size * self.args.gradient_accumulation_steps, dt)
                         running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                    print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
+                    if self.args.gns_type is not None:
+                        self.gns = self.gns_ema.get_gns()
+                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%, gns {self.gns:.2f}, batch_size {self.args.batch_size}, lr {self.lr}, tokens_trained {self.tokens_trained:e}")
+                    else:
+                        print(f"iter {self.iter_num}: loss {lossf:.4f}, time {dt*1000:.2f} ms, mfu {running_mfu*100:.2f}%")
+
                     if math.isnan(lossf):
                         # If training loss is nan, then exit.
                         with open(self.args.out_dir + "/nan_iter_num.txt", 'w') as file:
                             file.write(str(self.iter_num))
                             sys.exit("Exiting training loss is NaN")
 
-                    vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
-                    self.log_metrics_non_validation(lossf, running_mfu, vram_allocated, self.iter_num)
+                    self.vram_allocated = get_gpu_memory_info(info_type='used') if self.args.device != "cpu" else 0
+                    self.log_metrics_non_validation(lossf, running_mfu)
 
                 if self.args.create_statistics and local_iter_num % self.args.softmax_io_log_interval == 0:
                     create_statistics(self, graph_y_labels)

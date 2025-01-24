@@ -64,6 +64,13 @@ def parse_args():
     training_group.add_argument('--dataset_sampling_probs_final', default=None, nargs='+', type=float, help="If, set final sampling probabilities for each dataset in dataset_list.")
     training_group.add_argument('--dataset_sampling_probs_transition_method', default=None, type=str, choices=["linear", "cosine", "exponential"])
 
+    # Add GNS settings
+    training_group.add_argument('--gns_type', type=str, default=None, choices=['sogns', 'exact'], help='Type of gradient norm scaling to use (default: None)')
+    training_group.add_argument('--gns_ema_beta', type=float, default=0.9, choices=['sogns', 'exact'], help='Type of gradient norm scaling to use (default: None)')
+    training_group.add_argument('--gns_target', type=float, default=None)
+    training_group.add_argument('--gns_max_batch', type=int, default=100)
+    training_group.add_argument('--gns_batch_pct', type=float, default=0.2)
+
 
     # Model args
     model_group.add_argument('--block_size', default=256, type=int)
