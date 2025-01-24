@@ -58,7 +58,21 @@ def create_meta_from_text(text_file, output_path, special_chars={"<ukn>": 0}):
         pickle.dump(meta, f)
     print(f"Meta created from text and saved to {output_path}.")
 
-
+def export_tokens(meta_path, output_path):
+    meta = load_meta(meta_path)
+    with open(output_path, "w") as f:
+        for i in range(meta["vocab_size"]):
+            token = meta["itos"][i]
+            if token == "\n":
+                token = "\\n"
+            elif token == "\t":
+                token = "\\t"
+            elif token == "\r":
+                token = "\\r"
+            # Note: Add more special character handling here as needed
+            f.write(token + "\n")
+    print(f"Tokens exported to {output_path}")
+    
 def main():
     parser = argparse.ArgumentParser(description="Utility for handling token metadata.")
 
@@ -73,6 +87,12 @@ def main():
         nargs=2,
         help="Path to the input text file and the output meta.pkl file for creation.",
     )
+    
+    parser.add_argument(
+        "--export",
+        nargs=2,
+        help="Path to the meta.pkl file and the output text file for exporting tokens.",
+    )
 
     args = parser.parse_args()
 
@@ -82,7 +102,8 @@ def main():
         merge_metas(args.merge[0], args.merge[1], "merged_meta.pkl")
     elif args.create:
         create_meta_from_text(args.create[0], args.create[1])
-
+    elif args.export:
+        export_tokens(args.export[0], args.export[1])
 
 if __name__ == "__main__":
     main()

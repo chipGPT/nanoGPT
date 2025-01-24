@@ -2,6 +2,7 @@ import subprocess
 from konlpy.tag import Okt
 import argparse
 import re
+import json
 
 def transcribe_korean(sentence):
     """Transcribe a Korean sentence into its phonemes using KoNLPy (Okt)."""
@@ -34,37 +35,72 @@ def handle_mixed_language(word):
     else:  # Non-Korean Word
         return "[[[[[" + word + "]]]]]"
 
-def transcribe_multilingual(sentences, output_file):
-    """Transcribe multilingual sentences (English and Korean, with numbers) and save to a file."""
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for sentence in sentences:
-            result = []
-            # Split sentence but keep punctuation (preserve spaces, commas, etc.)
-            words = re.findall(r'\w+|[^\w\s]', sentence, re.UNICODE)
-            for word in words:
-                if re.match(r'\w+', word):  # Only process words (skip punctuation)
-                    result.append(handle_mixed_language(word))
-                else:
-                    result.append(word)  # Preserve punctuation as is
-            transcription_result = " ".join(result)
-            f.write(transcription_result + "\n")
-            print(transcription_result)  # Print to console for reference
+def transcribe_multilingual(sentences, input_json_key=None, output_json_key='ipa'):
+    """
+    Transcribe multilingual sentences and update JSON data directly.
+
+    Args:
+        sentences: JSON string or a loaded JSON object.
+        input_json_key: Key to extract sentences from in a JSON.
+        output_json_key: Key to store IPA transcription in the JSON (default: 'ipa').
+
+    Returns:
+        The modified JSON string with IPA transcriptions added.
+    """
+    try:
+        data = json.loads(sentences) if isinstance(sentences, str) else sentences
+        if not isinstance(data, list):
+            raise ValueError("JSON data should be a list of objects.")
+
+        for item in data:
+            if input_json_key in item:
+                sentence = item[input_json_key]
+                result = []
+                words = re.findall(r'\w+|[^\w\s]', sentence, re.UNICODE)
+                for word in words:
+                    if re.match(r'\w+', word):
+                        result.append(handle_mixed_language(word))
+                    else:
+                        result.append(word)
+                transcription_result = " ".join(result)
+                item[output_json_key] = transcription_result  # Update directly
+                print(transcription_result)
+            else:
+                print(f"Warning: Key '{input_json_key}' not found in item: {item}")
+
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error: {e}")
+        return None
+
+    return json.dumps(data, ensure_ascii=False, indent=4)
 
 def main():
-    parser = argparse.ArgumentParser(description='Transcribe multilingual sentences into IPA phonemes.')
-    parser.add_argument('input_file', type=str, help='Path to the input file containing sentences.')
-    parser.add_argument('output_file', type=str, help='Path to the output file for IPA transcription.')
+    parser = argparse.ArgumentParser(description='Transcribe multilingual sentences into IPA phonemes and update JSON data.')
+    parser.add_argument('input_file', type=str, help='Path to the input JSON file.')
+    parser.add_argument('--input_json_key', type=str, required=True, help='The key of the Korean text to convert to IPA in the JSON file.')
+    parser.add_argument('--output_json_key', type=str, default='ipa', help='The key to store the IPA transcription in the JSON file (default: "ipa").')
 
     args = parser.parse_args()
 
-    # Read input sentences
-    with open(args.input_file, 'r', encoding='utf-8') as f:
-        sentences = f.readlines()
+    try:
+        with open(args.input_file, 'r', encoding='utf-8') as f:
+            input_content = f.read()
 
-    # Transcribe and save to the output file
-    transcribe_multilingual(sentences, args.output_file)
+        # Transcribe and get the updated JSON data
+        updated_json_data = transcribe_multilingual(
+            input_content,
+            args.input_json_key,
+            args.output_json_key
+        )
+
+        # Overwrite the original file with the updated JSON
+        if updated_json_data:
+            with open(args.input_file, 'w', encoding='utf-8') as f:
+                f.write(updated_json_data)
+            print(f"Successfully updated JSON data in '{args.input_file}'")
+
+    except FileNotFoundError:
+        print(f"Error: Input file '{args.input_file}' not found.")
 
 if __name__ == '__main__':
     main()
-
-
