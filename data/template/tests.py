@@ -15,6 +15,7 @@ from argparse import Namespace
 from rich.console import Console
 from rich.theme import Theme
 from rich.table import Table
+from rich.text import Text
 
 console = Console(theme=Theme({
     "pass": "bold green",
@@ -23,7 +24,7 @@ console = Console(theme=Theme({
     "separator": "grey50",
     "input": "bold cyan",
     "output": "bold magenta",
-    "info": "bold blue"
+    "info": "bold blue",
 }))
 
 
@@ -188,10 +189,10 @@ class TestTokenizers(unittest.TestCase):
         args = Namespace(custom_chars_file="custom_chars.txt")
         # Create a custom characters file for testing
         with open(args.custom_chars_file, 'w', encoding='utf-8') as f:
-            f.write('a\nb\nc\n')
+            f.write('a\nb\nc\n\\n')
 
         tokenizer = CustomCharTokenizerWithByteFallback(args)
-        test_string = 'abc😊'
+        test_string = 'abc😊d\nefg'
 
         ids = tokenizer.tokenize(test_string)
         detokenized = tokenizer.detokenize(ids)
@@ -200,6 +201,15 @@ class TestTokenizers(unittest.TestCase):
         console.print(test_string, style="input")
         console.print("[output]Detokenized Output:[/output]")
         console.print(detokenized, style="output")
+
+        console.print("[info]Characters that used byte fallback:[/info]")
+        bft = [] # Byte Fallback Tokens
+        for char in detokenized:
+            if char not in tokenizer.custom_chars:
+                char = repr(char)
+                bft.append(char)
+
+        console.print(", ".join(bft), style="info")
 
         self.assertEqual(test_string, detokenized)
         print("CustomCharTokenizerWithByteFallback test passed.")
