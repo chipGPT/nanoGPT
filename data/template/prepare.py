@@ -9,15 +9,14 @@ from tokenizers import (
     CustomTokenizer,
     CharTokenizer,
     CustomCharTokenizerWithByteFallback,
+    CSVIntegerTokenizer,
 )
 from tqdm import tqdm
-import os
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Tokenize text data using different methods.")
     parser.add_argument("--tokens_file", type=str, default=None, help="Path to the file containing newline-separated tokens for tokenization")
-    parser.add_argument("--method", type=str, choices=["sentencepiece", "tiktoken", "char", "custom", "custom_char_byte_fallback", "numeric_range"], default="tiktoken", help="Tokenization method")
+    parser.add_argument("--method", type=str, choices=["sentencepiece", "tiktoken", "char", "custom", "custom_char_byte_fallback", "numeric_range", "csv_integer"], default="tiktoken", help="Tokenization method")
     # SentencePiece only arguments
     parser.add_argument("--vocab_size", type=int, default=500, help="Vocabulary size for SentencePiece model")
     parser.add_argument("--spm_model_file", type=str, default=None, help="Path to the pre-trained SentencePiece model file")
@@ -37,24 +36,29 @@ def parse_arguments():
     parser.add_argument("-t", "--train_input", type=str, help="Path to the training input text file")
     parser.add_argument("-v", "--val_input", type=str, help="Path to the validation input text file")
     parser.add_argument("-p", "--percentage_train", type=float, default=0.9, help="Value between 0 and 1.0 for train percentage split")
+    # Option to split at newline boundaries
+    parser.add_argument("--split_by_line", action="store_true", help="Split the data at newline boundaries when creating training and validation sets")
     # Numeric range tokenizer arguments
     parser.add_argument("--numeric_range", action="store_true", help="Use numeric range tokenization method")
     parser.add_argument("--min_token", type=int, default=0, help="Minimum value for numeric tokens")
     parser.add_argument("--max_token", type=int, default=65535, help="Maximum value for numeric tokens")
+    # CSV Integer Tokenizer arguments
+    parser.add_argument("--csv_file", type=str, help="Path to the CSV file to tokenize")
+    parser.add_argument("--field_prefixes", nargs='+', type=str, help="Prefixes for each field in the CSV")
+    parser.add_argument("--field_min_values", nargs='+', type=int, help="Minimum values for each field")
+    parser.add_argument("--field_max_values", nargs='+', type=int, help="Maximum values for each field")
     return parser.parse_args()
-
 
 def save_args(args, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'args.json'), 'w') as f:
         json.dump(vars(args), f, indent=4)
 
-def main():
-    args = parse_arguments()
-    os.makedirs('out', exist_ok=True)
-    save_args(args, "out")
-
-    # Read data
+def read_and_split_data(args):
+    """
+    Reads the input data and splits it into training and validation sets.
+    If split_by_line is True, the split occurs at newline boundaries.
+    """
     if args.use_separate_files:
         if not args.train_input or not args.val_input:
             raise ValueError(
@@ -71,13 +75,40 @@ def main():
             )
         with open(args.train_input, "r") as f:
             data = f.read()
-        n = len(data)
-        split_idx = int(n * args.percentage_train)
-        train_data = data[:split_idx]
-        val_data = data[split_idx:] if args.percentage_train < 1.0 else None
+
+        if args.split_by_line:
+            lines = data.split('\n')
+            total_lines = len(lines)
+            split_idx = int(total_lines * args.percentage_train)
+            train_lines = lines[:split_idx]
+            val_lines = lines[split_idx:] if args.percentage_train < 1.0 else []
+            train_data = '\n'.join(train_lines)
+            val_data = '\n'.join(val_lines) if val_lines else None
+        else:
+            n = len(data)
+            split_idx = int(n * args.percentage_train)
+            train_data = data[:split_idx]
+            val_data = data[split_idx:] if args.percentage_train < 1.0 else None
+
+    return train_data, val_data
+
+def save_tokens(ids, output_file, dtype):
+    total = len(ids)
+    batch_size = 1024 * 1024  # 1 million tokens per batch
+    with open(os.path.join('out', output_file), 'wb') as f_out:
+        for i in tqdm(range(0, total, batch_size), desc=f"Saving {output_file}"):
+            batch = ids[i:i+batch_size]
+            np.array(batch, dtype=dtype).tofile(f_out)
+
+def main():
+    args = parse_arguments()
+    os.makedirs('out', exist_ok=True)
+    save_args(args, "out")
+
+    # Read and split data
+    train_data, val_data = read_and_split_data(args)
 
     # Select tokenizer
-    tokenizer = None
     if args.method == "numeric_range":
         tokenizer = NumericRangeTokenizer(args)
     elif args.method == "sentencepiece":
@@ -86,42 +117,35 @@ def main():
         tokenizer = TiktokenTokenizer(args)
     elif args.method == "custom":
         tokenizer = CustomTokenizer(args)
-    elif args.method == "replace":
-        tokenizer = ReplaceTokenizer(args)
-    elif args.method == "lines":
-        tokenizer = LinesTokenizer(args)
     elif args.method == "char":
         tokenizer = CharTokenizer(args, train_data, val_data)
     elif args.method == "custom_char_byte_fallback":
         tokenizer = CustomCharTokenizerWithByteFallback(args)
+    elif args.method == "csv_integer":
+        if args.use_separate_files:
+            raise ValueError("When using csv_integer tokenization, --use_separate_files must not be used. Provide a single input file with --train_input.")
+        if not args.field_prefixes or not args.field_min_values or not args.field_max_values:
+            raise ValueError("You must provide --field_prefixes, --field_min_values, and --field_max_values for csv_integer method.")
+        tokenizer = CSVIntegerTokenizer(args)
     else:
         raise ValueError(f"Unknown tokenization method: {args.method}")
 
     # Tokenize data
     train_ids = tokenizer.tokenize(train_data)
-    if val_data:
-        val_ids = tokenizer.tokenize(val_data)
-    else:
-        val_ids = None
+    val_ids = tokenizer.tokenize(val_data) if val_data else None
 
-    # Save tokenized data with progress bar
-    def save_tokens(ids, output_file, dtype):
-        total = len(ids)
-        batch_size = 1024 * 1024  # 1 million tokens per batch
-        with open(output_file, 'wb') as f_out:
-            for i in tqdm(range(0, total, batch_size), desc=f"Saving {output_file}"):
-                batch = ids[i:i+batch_size]
-                np.array(batch, dtype=dtype).tofile(f_out)
-
-    if (args.method == "tiktoken" and args.tiktoken_encoding == "cl100k_base") or (args.method == "numeric_range" and args.max_token > 65535):
+    # Determine appropriate dtype
+    vocab_size = tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else len(set(train_ids))
+    if (args.method == "tiktoken" and args.tiktoken_encoding == "cl100k_base") or (vocab_size > 65535):
         dtype = np.uint32
     else:
         dtype = np.uint16
 
-    save_tokens(train_ids, args.train_output, dtype)
-    if val_data and val_ids:
+    # Save tokenized data
+    if train_ids:
+        save_tokens(train_ids, args.train_output, dtype)
+    if val_ids:
         save_tokens(val_ids, args.val_output, dtype)
-
 
 if __name__ == "__main__":
     main()
