@@ -563,6 +563,10 @@ def parse_args():
     logging_group.add_argument('--tensorboard_log', default=True, action=argparse.BooleanOptionalAction)
     logging_group.add_argument('--tensorboard_log_dir', type=str, default='logs')
     logging_group.add_argument('--tensorboard_run_name', type=str, default='logs-test')
+    logging_group.add_argument('--tensorboard_graph', default=True, action=argparse.BooleanOptionalAction)
+
+    # Onnx args
+    logging_group.add_argument('--onnx_output', default=False, action=argparse.BooleanOptionalAction)
 
     # Wandb args
     logging_group.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)

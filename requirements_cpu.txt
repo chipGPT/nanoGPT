@@ -10,3 +10,5 @@ tiktoken==0.7.0
 torchinfo==1.8.0
 transformers==4.44.2
 wandb==0.18.3
+onnx==1.17.0
+

@@ -11,6 +11,8 @@ import shutil
 import sys
 import time
 
+import torch.onnx
+
 from utils.gpu_monitoring import get_gpu_memory_info
 from utils.model_info import (
     print_summary,
@@ -772,7 +774,34 @@ class Trainer:
         self.grad_mean = torch.mean(all_gradients).item()
 
 
+    def export_model_graph(self):
+        # Dummy input for tracing
+        dummy_input = torch.randint(0, self.model_args['vocab_size'], (self.args.batch_size, self.args.block_size)).to(self.device)
+        dummy_targets = torch.randint(0, self.model_args['vocab_size'], (self.args.batch_size, self.args.block_size)).to(self.device)  # Dummy targets
+        dummy_iter_num = torch.tensor([0], dtype=torch.long).to(self.device) # Dummy iter_num (must be a tensor!)
+
+        # Log the model graph
+        if self.args.tensorboard_log and self.args.tensorboard_graph:
+            self.writer.add_graph(self.model, (dummy_input, dummy_targets, dummy_iter_num))
+
+        # Export to ONNX and save for Netron
+        if self.args.onnx_output:
+            onnx_path = os.path.join(self.args.out_dir, "model.onnx")
+            torch.onnx.export(self.model,
+                              (dummy_input, dummy_targets, dummy_iter_num), # All dummy inputs
+                              onnx_path,
+                              export_params=True,
+                              opset_version=14,
+                              input_names=['input'],
+                              output_names=['output'],
+                              dynamic_axes={'input': {0: 'batch_size', 1: 'sequence_length'},
+                                            'output': {0: 'batch_size', 1: 'sequence_length'}})
+
     def log_metrics(self, losses, running_mfu, epoch, tokens_trained, target_dataset):
+
+        if self.iter_num == 0 and self.args.tensorboard_log:
+            self.export_model_graph()
+
 
         if self.args.tensorboard_log:
             # Log metrics for each dataset separately
